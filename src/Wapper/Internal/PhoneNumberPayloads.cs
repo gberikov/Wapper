@@ -75,3 +75,17 @@ internal sealed class TwoStepPinPayload
     [JsonPropertyName("pin")]
     public string? Pin { get; set; }
 }
+
+/// <summary>Wire shape of a registration.</summary>
+internal sealed class RegisterPayload
+{
+    [JsonPropertyName("messaging_product")]
+    public string MessagingProduct { get; set; } = "whatsapp";
+
+    [JsonPropertyName("pin")]
+    public string? Pin { get; set; }
+
+    /// <summary>Left out entirely when the number is not to use local storage.</summary>
+    [JsonPropertyName("data_localization_region")]
+    public string? DataLocalizationRegion { get; set; }
+}
