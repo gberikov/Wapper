@@ -1,0 +1,15 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!-- Samples are built by CI so they cannot rot, and never shipped. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <!-- IDE0005 (unused usings) only runs on build when the documentation file is
+         generated; a sample is not a public API, so the missing-comment warning that comes
+         with it is switched back off. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>
