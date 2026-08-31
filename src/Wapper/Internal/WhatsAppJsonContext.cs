@@ -13,6 +13,7 @@ namespace Wapper.Internal;
 [JsonSerializable(typeof(GraphErrorEnvelope))]
 [JsonSerializable(typeof(AppUsage))]
 [JsonSerializable(typeof(SendMessagePayload))]
+[JsonSerializable(typeof(WebhookPayload))]
 [JsonSerializable(typeof(SendMessageResponse))]
 [JsonSerializable(typeof(MediaIdResponse))]
 [JsonSerializable(typeof(MediaInfoResponse))]

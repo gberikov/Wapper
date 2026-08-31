@@ -45,4 +45,19 @@ public sealed class WhatsAppOptions
 
     /// <summary>How hard the client paces itself against Meta's limits.</summary>
     public WhatsAppRateLimitOptions RateLimits { get; set; } = new();
+
+    /// <summary>
+    /// The app secret, used to check that a webhook delivery really came from Meta.
+    /// </summary>
+    /// <remarks>
+    /// Required to receive webhooks. The endpoint is public, so without it anyone who learns
+    /// the URL can post whatever they like into the application.
+    /// </remarks>
+    public string? AppSecret { get; set; }
+
+    /// <summary>
+    /// The token Meta echoes back when the webhook subscription is first verified.
+    /// </summary>
+    /// <remarks>Chosen when the webhook is configured in the Meta app dashboard.</remarks>
+    public string? WebhookVerifyToken { get; set; }
 }
