@@ -14,11 +14,38 @@ public static class WhatsAppServiceCollectionExtensions
     /// <summary>Name of the <see cref="HttpClient"/> the client sends through.</summary>
     public const string HttpClientName = "Wapper";
 
-    /// <summary>Registers the default tenant, configured in code.</summary>
+    /// <summary>
+    /// Registers the client against the <c>WhatsApp</c> configuration section.
+    /// </summary>
+    /// <param name="services">The container.</param>
+    /// <param name="configure">
+    /// Optional. Runs after the section is bound, so what it sets wins — which is how a value
+    /// is pinned in code while the rest still comes from configuration.
+    /// </param>
     /// <returns>
     /// The <see cref="IHttpClientBuilder"/> of the underlying client, so handlers and
     /// policies can be chained onto it.
     /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The section is found by name, so nothing has to be passed in:
+    /// <c>services.AddWhatsApp()</c> is the whole registration for an application with one
+    /// phone number and an <c>appsettings.json</c>. Entries under
+    /// <see cref="WhatsAppOptions.TenantsSectionName"/> work too, and are bound the first
+    /// time a tenant is asked for.
+    /// </para>
+    /// <para>
+    /// Configuration is optional here rather than required: with none registered this
+    /// configures nothing and leaves the defaults, so
+    /// <c>services.AddWhatsApp(o => { … })</c> is a complete registration on its own.
+    /// </para>
+    /// <para>
+    /// Two things the overload taking a section does that this one cannot: it fails startup
+    /// for a tenant whose settings are invalid rather than waiting for its first call, and it
+    /// picks up a configuration reload. Both need the tenants enumerated, which needs the
+    /// section.
+    /// </para>
+    /// </remarks>
     public static IHttpClientBuilder AddWhatsApp(
         this IServiceCollection services,
         Action<WhatsAppOptions>? configure = null) =>
@@ -74,13 +101,21 @@ public static class WhatsAppServiceCollectionExtensions
         return services.AddWhatsAppCore();
     }
 
-    /// <summary>Registers a named tenant, configured in code.</summary>
+    /// <summary>
+    /// Registers a named tenant against the <c>WhatsApp</c> configuration section.
+    /// </summary>
     /// <param name="services">The container.</param>
     /// <param name="tenant">
     /// Tenant name, passed later to <c>IWhatsAppClient.For(tenant)</c>. Use
     /// <see cref="WhatsAppTenant.Default"/> for an application with a single phone number.
     /// </param>
-    /// <param name="configure">Configures the tenant's options.</param>
+    /// <param name="configure">
+    /// Optional. Runs after the section is bound, so what it sets wins.
+    /// </param>
+    /// <remarks>
+    /// The tenant reads the section itself and then its own entry under
+    /// <see cref="WhatsAppOptions.TenantsSectionName"/>, so it inherits everything shared.
+    /// </remarks>
     public static IHttpClientBuilder AddWhatsApp(
         this IServiceCollection services,
         string tenant,
@@ -89,10 +124,32 @@ public static class WhatsAppServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(tenant);
 
+        // Before the delegate, so the delegate still wins. Registration order is the order
+        // the options are configured in.
+        services.AddWhatsAppConventionBinding();
+
         Register(services, tenant, shared: null, own: null, configure);
 
         return services.AddWhatsAppCore();
     }
+
+    /// <summary>
+    /// Teaches the container to bind any tenant from the conventional section.
+    /// </summary>
+    /// <remarks>
+    /// Registered once however many tenants are added, and only by the overloads that were
+    /// given no section of their own — an explicit section is an instruction to read that and
+    /// nothing else.
+    /// </remarks>
+    /// <remarks>
+    /// The implementation type is named as well as the service type, because that is what
+    /// <c>TryAddEnumerable</c> compares against: a factory alone is indistinguishable from
+    /// every other way of configuring these options, and it refuses rather than guesses.
+    /// </remarks>
+    private static void AddWhatsAppConventionBinding(this IServiceCollection services) =>
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IConfigureOptions<WhatsAppOptions>, WhatsAppConventionBinder>(
+                static provider => new WhatsAppConventionBinder(provider.GetService<IConfiguration>())));
 
     /// <summary>
     /// Registers one named tenant from one configuration section.

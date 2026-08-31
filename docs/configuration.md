@@ -1,10 +1,22 @@
 # Configuration
 
-Everything lives under one `WhatsApp` section, and one call reads all of it:
+Everything lives under one `WhatsApp` section, and it is found by name, so there is nothing
+to pass in:
 
 ```csharp
-builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+builder.Services.AddWhatsApp();
 ```
+
+Settings can also be written in code, and the two mix — the delegate runs after the section
+is bound, so it wins:
+
+```csharp
+// Everything from configuration, except this one value pinned here.
+builder.Services.AddWhatsApp(o => o.GraphApiVersion = "v27.0");
+```
+
+With no configuration registered at all — a console application, a test — the delegate is the
+whole configuration, and nothing complains about the missing section.
 
 ## One phone number
 
@@ -76,6 +88,26 @@ Three things worth knowing about the multi-tenant shape:
 If you would rather have one shape whatever the number of tenants, a single entry under
 `Tenants` works exactly as well — it just costs naming the tenant on every call.
 
+### Passing the section instead
+
+`AddWhatsApp()` finds the tenants when they are asked for, which is enough for most hosts and
+is what lets a tenant added to configuration later work without a restart. Handing it the
+section instead makes it read them at registration:
+
+```csharp
+builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+```
+
+Two things follow from enumerating them up front, and neither is possible without it:
+
+- **A tenant whose settings are invalid fails startup**, rather than failing on its first
+  call. A `GraphApiVersion` of `latest` in one tenant's entry is then a boot failure naming
+  that tenant.
+- **A configuration reload reaches the options.** Change a limit in a mounted config map and
+  the next call paces to it.
+
+Both overloads bind identically; nothing else about the section changes.
+
 ## Where the tokens go
 
 An access token is worth exactly as much as the password it replaces, and `appsettings.json`
@@ -141,9 +173,13 @@ needed to send.
 | `RateLimits:MaxRetries` | 4 | Spread over Meta's `4^X` seconds: 1, 4, 16 and 64. |
 | `RateLimits:UsagePercentThreshold` | 100 | Start holding back when `X-App-Usage` reports this much of the allowance spent. |
 
-Every setting is validated at startup, so a `Timeout` of zero or a `GraphApiVersion` of
-`latest` fails the host rather than the first send. Credentials are the exception, and
-deliberately: demanding them in configuration would make the arrangement below impossible.
+The default tenant's settings are validated at startup, so a `Timeout` of zero or a
+`GraphApiVersion` of `latest` fails the host rather than the first send. A named tenant is
+validated when it is first used, unless the section was
+[passed in](#passing-the-section-instead), which validates every tenant at startup too.
+
+Credentials are the exception either way, and deliberately: demanding them in configuration
+would make the arrangement below impossible.
 
 ## Credentials from somewhere other than configuration
 
@@ -152,7 +188,7 @@ through Embedded Signup does not have one — tenants appear while the process i
 their tokens expire and rotate. Replace the credential lookup instead:
 
 ```csharp
-builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+builder.Services.AddWhatsApp();
 builder.Services.AddSingleton<IWhatsAppCredentialsProvider, TenantCredentials>();
 ```
 

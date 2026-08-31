@@ -9,7 +9,7 @@ full allowance send three times the rate and have two thirds of it rejected, so 
 have to be shared:
 
 ```csharp
-builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+builder.Services.AddWhatsApp();
 builder.Services.AddWhatsAppRedisRateLimiting("localhost:6379");
 ```
 

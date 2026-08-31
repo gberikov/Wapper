@@ -12,7 +12,8 @@ using Wapper.Webhooks;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddWhatsApp(builder.Configuration.GetSection(WhatsAppOptions.SectionName));
+// Finds the "WhatsApp" section by name -- there is nothing to pass in.
+builder.Services.AddWhatsApp();
 
 // One handler per event type. A handler for a base type — IncomingMessage, WhatsAppEvent —
 // sees everything of that shape as well.
