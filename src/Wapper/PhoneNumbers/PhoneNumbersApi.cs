@@ -109,6 +109,129 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
             .ConfigureAwait(false);
     }
 
+    public async Task RequestVerificationCodeAsync(
+        VerificationCodeMethod method,
+        string language = "en_US",
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(language);
+
+        var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
+            .ConfigureAwait(false);
+
+        await client.SendAsync(
+                new GraphRequest
+                {
+                    Tenant = tenant,
+                    Credentials = credentials,
+                    Method = HttpMethod.Post,
+                    // Query string rather than a body: this is how Meta documents the call, and
+                    // the code is delivered out of band anyway.
+                    Path = $"{Target(phoneNumberId, credentials)}/request_code" +
+                           $"?code_method={ToWire(method)}" +
+                           $"&language={Uri.EscapeDataString(language)}",
+                    Kind = GraphCallKind.Management,
+                    // A retry sends a second code and invalidates the first, which strands
+                    // whoever is looking at the message that already arrived.
+                    Retryable = false,
+                },
+                WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task VerifyAsync(
+        string code,
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var digits = GuardCode(code);
+
+        var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
+            .ConfigureAwait(false);
+
+        await client.SendAsync(
+                new GraphRequest
+                {
+                    Tenant = tenant,
+                    Credentials = credentials,
+                    Method = HttpMethod.Post,
+                    Path = $"{Target(phoneNumberId, credentials)}/verify_code" +
+                           $"?code={Uri.EscapeDataString(digits)}",
+                    Kind = GraphCallKind.Management,
+                },
+                WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task RegisterAsync(
+        string pin,
+        string? dataLocalizationRegion = null,
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        GuardPin(pin);
+
+        var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
+            .ConfigureAwait(false);
+        var payload = new RegisterPayload
+        {
+            Pin = pin,
+            DataLocalizationRegion = GuardRegion(dataLocalizationRegion),
+        };
+
+        await client.SendAsync(
+                new GraphRequest
+                {
+                    Tenant = tenant,
+                    Credentials = credentials,
+                    Method = HttpMethod.Post,
+                    Path = $"{Target(phoneNumberId, credentials)}/register",
+                    Kind = GraphCallKind.Management,
+                    Content = () => JsonContent.Create(
+                        payload,
+                        WhatsAppJsonContext.Default.RegisterPayload),
+                    // Ten attempts per number per 72 hours, counting the failed ones. Spending
+                    // one of them on an automatic retry is not worth it.
+                    Retryable = false,
+                },
+                WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task DeregisterAsync(
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
+            .ConfigureAwait(false);
+
+        await client.SendAsync(
+                new GraphRequest
+                {
+                    Tenant = tenant,
+                    Credentials = credentials,
+                    Method = HttpMethod.Post,
+                    Path = $"{Target(phoneNumberId, credentials)}/deregister",
+                    Kind = GraphCallKind.Management,
+                    // Shares the ten-per-72-hours allowance with registration.
+                    Retryable = false,
+                },
+                WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static string ToWire(VerificationCodeMethod method) => method switch
+    {
+        VerificationCodeMethod.Sms => "SMS",
+        VerificationCodeMethod.Voice => "VOICE",
+        _ => throw new ArgumentOutOfRangeException(nameof(method), method, null),
+    };
+
     private static string Target(string? phoneNumberId, WhatsAppCredentials credentials) =>
         string.IsNullOrWhiteSpace(phoneNumberId) ? credentials.PhoneNumberId : phoneNumberId;
 
@@ -124,5 +247,49 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                 $"A two-step verification PIN is exactly {PinLength} digits.",
                 nameof(pin));
         }
+    }
+
+    /// <summary>
+    /// Strips the code down to what Meta accepts.
+    /// </summary>
+    /// <remarks>
+    /// The message that carries it writes the code as <c>123-830</c> and the endpoint wants
+    /// <c>123830</c>, so a code copied straight out of the message would otherwise be rejected
+    /// as wrong rather than as malformed.
+    /// </remarks>
+    private static string GuardCode(string code)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(code);
+
+        var digits = new string(code.Where(static c => c is not ('-' or ' ')).ToArray());
+
+        if (digits.Length == 0 || !digits.All(char.IsAsciiDigit))
+        {
+            throw new ArgumentException(
+                "A verification code is digits, optionally written with a hyphen.",
+                nameof(code));
+        }
+
+        return digits;
+    }
+
+    private static string? GuardRegion(string? region)
+    {
+        if (region is null)
+        {
+            return null;
+        }
+
+        // Two letters, because Meta answers "Germany" or "DEU" with the same bare code 100 it
+        // gives every other malformed parameter.
+        if (region.Length != 2 || !region.All(char.IsAsciiLetter))
+        {
+            throw new ArgumentException(
+                $"A data localization region is a two-letter ISO 3166 country code, and " +
+                $"'{region}' is not one.",
+                "dataLocalizationRegion");
+        }
+
+        return region.ToUpperInvariant();
     }
 }

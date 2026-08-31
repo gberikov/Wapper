@@ -20,6 +20,7 @@ namespace Wapper.Internal;
 [JsonSerializable(typeof(PhoneNumberPayload))]
 [JsonSerializable(typeof(PhoneNumberListResponse))]
 [JsonSerializable(typeof(TwoStepPinPayload))]
+[JsonSerializable(typeof(RegisterPayload))]
 [JsonSerializable(typeof(SendMessageResponse))]
 [JsonSerializable(typeof(MediaIdResponse))]
 [JsonSerializable(typeof(MediaInfoResponse))]

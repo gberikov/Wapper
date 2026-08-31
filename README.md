@@ -204,6 +204,40 @@ Numbers cannot be created or deleted through the API — that is WhatsApp Manage
 Suite or Embedded Signup. `SetTwoStepPinAsync` is the exception, and the only way to set a new
 PIN without knowing the old one.
 
+## Getting a number onto the Cloud API
+
+Adding a number to the account is WhatsApp Manager's job. Everything after that is the API's,
+and registering is *only* the API's — WhatsApp Manager cannot do it:
+
+```csharp
+await whatsApp.PhoneNumbers.RequestVerificationCodeAsync(
+    VerificationCodeMethod.Sms,
+    cancellationToken: ct);
+
+// The message spells the code "123-830"; the hyphen is stripped for you.
+await whatsApp.PhoneNumbers.VerifyAsync(code, cancellationToken: ct);
+
+// Sets the two-step PIN if the number has none yet.
+await whatsApp.PhoneNumbers.RegisterAsync("150954", cancellationToken: ct);
+```
+
+Registering and deregistering share an allowance of **ten attempts per number per 72 hours**,
+and Meta counts the failed ones. The eleventh returns `133016` and locks the number out for the
+rest of the window, so Wapper never retries any of these three calls automatically — a retry
+would spend an attempt, or in the case of `RequestVerificationCodeAsync` send a second code and
+silently invalidate the first.
+
+Pass a two-letter country code to keep data at rest in one region:
+
+```csharp
+await whatsApp.PhoneNumbers.RegisterAsync("150954", "DE", cancellationToken: ct);
+```
+
+Local storage cannot be moved or switched off in place: deregister, then register again.
+
+Register a second time after a display name change is approved — `PhoneNumberNameChanged` with
+`DisplayNameDecision.Approved` is the signal. Re-registering before approval does nothing.
+
 ## Running in more than one instance
 
 Meta counts per phone number on its side. Three replicas each pacing themselves against the
