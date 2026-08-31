@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Wapper.Flows;
 using Wapper.Internal;
 using Wapper.Messages;
 using Wapper.PhoneNumbers;
@@ -83,6 +84,14 @@ public static class WhatsAppWebhookParser
 
             case "phone_number_name_update":
                 events.Add(ToPhoneNumberNameChange(value, businessAccountId));
+                return;
+
+            // One field carries both the status changes and the monitoring alerts, told apart
+            // by `event`.
+            case "flows":
+                events.Add(value.Event == "FLOW_STATUS_CHANGE"
+                    ? ToFlowStatusChange(value, businessAccountId)
+                    : ToFlowAlert(value, businessAccountId));
                 return;
 
             default:
@@ -176,6 +185,54 @@ public static class WhatsAppWebhookParser
         RequestedName = value.RequestedVerifiedName,
         RejectionReason = ParseRejection(value.RejectionReason),
         RawRejectionReason = value.RejectionReason,
+    };
+
+    private static FlowStatusChanged ToFlowStatusChange(
+        WebhookValue value,
+        string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        FlowId = value.FlowId ?? string.Empty,
+        // Absent when the Flow has just been created, which is the one case where there is no
+        // previous state to report.
+        PreviousStatus = FlowMapping.ParseStatus(value.OldStatus),
+        Status = FlowMapping.ParseStatus(value.NewStatus),
+        Message = value.Message,
+    };
+
+    private static FlowAlert ToFlowAlert(WebhookValue value, string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        FlowId = value.FlowId ?? string.Empty,
+        Kind = ParseAlertKind(value.Event),
+        RawKind = value.Event,
+        State = value.AlertState?.ToUpperInvariant() switch
+        {
+            "ACTIVATED" => FlowAlertState.Activated,
+            "DEACTIVATED" => FlowAlertState.Deactivated,
+            _ => FlowAlertState.Unknown,
+        },
+        Threshold = value.Threshold,
+        Message = value.Message,
+        RequestCount = value.RequestsCount,
+        ErrorRate = value.ErrorRate,
+        MedianLatency = value.P50Latency,
+        NinetiethPercentileLatency = value.P90Latency,
+        Errors = [.. (value.Errors ?? []).Select(error => new FlowAlertError
+        {
+            ErrorType = error.ErrorType,
+            Count = error.ErrorCount,
+            Rate = error.ErrorRate,
+        })],
+    };
+
+    private static FlowAlertKind ParseAlertKind(string? name) => name?.ToUpperInvariant() switch
+    {
+        "CLIENT_ERROR_RATE" => FlowAlertKind.ClientErrorRate,
+        "ENDPOINT_ERROR_RATE" => FlowAlertKind.EndpointErrorRate,
+        "ENDPOINT_LATENCY" => FlowAlertKind.EndpointLatency,
+        "ENDPOINT_AVAILABILITY" => FlowAlertKind.EndpointAvailability,
+        _ => FlowAlertKind.Unknown,
     };
 
     private static PhoneNumberQualityEvent ParsePhoneNumberEvent(string? name) => name?.ToUpperInvariant() switch

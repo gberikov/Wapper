@@ -65,6 +65,12 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
             case PhoneNumberNameChanged name:
                 await InvokeAsync(services, name, cancellationToken).ConfigureAwait(false);
                 break;
+            case FlowStatusChanged flow:
+                await InvokeAsync(services, flow, cancellationToken).ConfigureAwait(false);
+                break;
+            case FlowAlert alert:
+                await InvokeAsync(services, alert, cancellationToken).ConfigureAwait(false);
+                break;
             default:
                 logger.LogWarning(
                     "No dispatch is registered for webhook event type {EventType}.",
