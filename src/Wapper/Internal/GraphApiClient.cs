@@ -146,6 +146,20 @@ internal sealed class GraphApiClient(
         }
     }
 
+    /// <summary>
+    /// The WhatsApp Business Account id, which every account-level call is addressed to.
+    /// </summary>
+    /// <remarks>
+    /// Optional in configuration, because an application that only sends messages never needs
+    /// it. One that manages the account does, so the failure names the setting.
+    /// </remarks>
+    internal static string RequireBusinessAccount(WhatsAppCredentials credentials) =>
+        credentials.WhatsAppBusinessAccountId
+        ?? throw new WhatsAppConfigurationException(
+            "This call is made against the WhatsApp Business Account, and its id is not " +
+            "configured. Set WhatsApp:WhatsAppBusinessAccountId, or return it from your " +
+            $"{nameof(IWhatsAppCredentialsProvider)}.");
+
     internal static Uri BuildUri(WhatsAppOptions options, string path)
     {
         // A leading slash on the relative part would drop the base path, and a base address

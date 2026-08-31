@@ -170,6 +170,40 @@ registered), which the client paces separately from message throughput.
 
 Not covered yet: archiving and unarchiving.
 
+## Checking the phone number
+
+```csharp
+var number = await whatsApp.PhoneNumbers.GetAsync(cancellationToken: ct);
+
+if (number.Status is not PhoneNumberStatus.Connected)
+{
+    logger.LogError("{Number} is {Status} and cannot send.", number.DisplayPhoneNumber, number.Status);
+}
+```
+
+Worth doing at startup. A number that is `Flagged`, `RateLimited` or `Restricted` fails every
+send with an error that reads like a transient one, and no amount of retrying will help.
+
+Graph returns only a handful of fields by default and leaves out the ones worth reading a
+number for, so Wapper always asks for the full set — `status` and `throughput` included.
+
+`number.Throughput` is the messages-per-second ceiling: `Standard` is 80, `High` is 1000. Meta
+raises it as volume grows, and announces it on the webhook. `RateLimits.MessagesPerSecond`
+defaults to the conservative 80; raise it once the number reports `High`, or a high-throughput
+number will be paced twelve times slower than it is allowed to send.
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<NumberWatcher, PhoneNumberQualityChanged>();
+```
+
+`PhoneNumberQualityEvent.Flagged` is the one to act on: it means quality has dropped and the
+daily messaging limit will fall if nothing changes. Display name decisions arrive as
+`PhoneNumberNameChanged`.
+
+Numbers cannot be created or deleted through the API — that is WhatsApp Manager, Meta Business
+Suite or Embedded Signup. `SetTwoStepPinAsync` is the exception, and the only way to set a new
+PIN without knowing the old one.
+
 ## Running in more than one instance
 
 Meta counts per phone number on its side. Three replicas each pacing themselves against the

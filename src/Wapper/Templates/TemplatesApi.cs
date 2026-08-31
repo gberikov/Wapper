@@ -15,7 +15,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
-        var accountId = RequireAccount(credentials);
+        var accountId = GraphApiClient.RequireBusinessAccount(credentials);
         string? after = null;
 
         do
@@ -38,9 +38,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                 yield return item.ToTemplate();
             }
 
-            // Meta signals the last page by leaving out `next`, not by sending an empty
-            // cursor: it keeps sending a cursor that would fetch the same page again.
-            after = page.Paging?.Next is null ? null : page.Paging.Cursors?.After;
+            after = page.Paging?.NextCursor;
         }
         while (!string.IsNullOrEmpty(after));
     }
@@ -78,7 +76,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
         GuardName(template.Name);
 
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
-        var accountId = RequireAccount(credentials);
+        var accountId = GraphApiClient.RequireBusinessAccount(credentials);
         var payload = template.ToPayload(allowCategoryChange);
 
         var response = await client.SendAsync(
@@ -224,7 +222,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
     private async Task DeleteAsync(string query, CancellationToken cancellationToken)
     {
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
-        var accountId = RequireAccount(credentials);
+        var accountId = GraphApiClient.RequireBusinessAccount(credentials);
 
         await client.SendAsync(
                 new GraphRequest
@@ -303,13 +301,6 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                 nameof(name));
         }
     }
-
-    private static string RequireAccount(WhatsAppCredentials credentials) =>
-        credentials.WhatsAppBusinessAccountId
-        ?? throw new WhatsAppConfigurationException(
-            "Managing templates needs the WhatsApp Business Account id. Set " +
-            "WhatsApp:WhatsAppBusinessAccountId, or return it from your " +
-            $"{nameof(IWhatsAppCredentialsProvider)}.");
 
     private ValueTask<WhatsAppCredentials> ResolveAsync(CancellationToken cancellationToken) =>
         client.ResolveCredentialsAsync(tenant, cancellationToken);
