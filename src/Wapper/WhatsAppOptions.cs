@@ -1,3 +1,5 @@
+using Wapper.RateLimiting;
+
 namespace Wapper;
 
 /// <summary>
@@ -40,4 +42,7 @@ public sealed class WhatsAppOptions
     /// <summary>How long a single HTTP call may take. Defaults to 100 seconds.</summary>
     /// <remarks>This does not include time spent waiting for a rate limit token.</remarks>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(100);
+
+    /// <summary>How hard the client paces itself against Meta's limits.</summary>
+    public WhatsAppRateLimitOptions RateLimits { get; set; } = new();
 }

@@ -26,6 +26,41 @@ internal sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpRespon
             Content = new StringContent(body, Encoding.UTF8, mediaType),
         });
 
+    /// <summary>
+    /// Returns each response in turn, repeating the last one once the script runs out. Used
+    /// to script a rejection followed by a success.
+    /// </summary>
+    public static StubHttpMessageHandler Sequence(params (HttpStatusCode Status, string Body)[] responses)
+    {
+        var index = 0;
+
+        return new StubHttpMessageHandler(_ =>
+        {
+            var (status, body) = responses[Math.Min(index++, responses.Length - 1)];
+
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        });
+    }
+
+    /// <summary>Returns a response carrying one header, for the usage-header paths.</summary>
+    public static StubHttpMessageHandler ReturningWithHeader(
+        HttpStatusCode status,
+        string body,
+        string headerName,
+        string headerValue) =>
+        new(_ =>
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+            response.Headers.TryAddWithoutValidation(headerName, headerValue);
+            return response;
+        });
+
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)

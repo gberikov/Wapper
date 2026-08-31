@@ -1,13 +1,13 @@
 using System.Net.Http.Json;
+using Microsoft.Extensions.Time.Testing;
 using Wapper.Internal;
+using Wapper.RateLimiting;
 using Wapper.Tests.Fakes;
 
 namespace Wapper.Tests;
 
 public class GraphApiClientTests
 {
-    private const string Tenant = WhatsAppTenant.Default;
-
     private static readonly WhatsAppCredentials Credentials = new()
     {
         AccessToken = "token-abc",
@@ -20,14 +20,7 @@ public class GraphApiClientTests
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, """{"error":{"code":0}}""");
         var client = CreateClient(handler);
 
-        await client.SendAsync(
-            Tenant,
-            Credentials,
-            HttpMethod.Post,
-            $"{Credentials.PhoneNumberId}/messages",
-            content: null,
-            WhatsAppJsonContext.Default.GraphErrorEnvelope,
-            TestContext.Current.CancellationToken);
+        await SendAsync(client, path: $"{Credentials.PhoneNumberId}/messages", method: HttpMethod.Post);
 
         var request = Assert.Single(handler.Requests);
         Assert.Equal(
@@ -57,7 +50,11 @@ public class GraphApiClientTests
             }
             """;
 
-        var client = CreateClient(StubHttpMessageHandler.Returning(HttpStatusCode.BadRequest, Body));
+        // Retries are what would otherwise swallow the original error, so switch them off to
+        // look at the parsing on its own.
+        var client = CreateClient(
+            StubHttpMessageHandler.Returning(HttpStatusCode.BadRequest, Body),
+            options => options.RateLimits.Enabled = false);
 
         var exception = await Assert.ThrowsAsync<WhatsAppApiException>(() => SendAsync(client));
 
@@ -85,7 +82,9 @@ public class GraphApiClientTests
             }
             """;
 
-        var client = CreateClient(StubHttpMessageHandler.Returning(HttpStatusCode.TooManyRequests, Body));
+        var client = CreateClient(
+            StubHttpMessageHandler.Returning(HttpStatusCode.TooManyRequests, Body),
+            options => options.RateLimits.Enabled = false);
 
         var exception = await Assert.ThrowsAsync<WhatsAppApiException>(() => SendAsync(client));
 
@@ -102,7 +101,8 @@ public class GraphApiClientTests
         // Gateways in front of the Graph API return HTML, and a dropped connection returns
         // nothing at all. Reporting the failure must not itself throw.
         var client = CreateClient(
-            StubHttpMessageHandler.Returning(HttpStatusCode.BadGateway, body, mediaType));
+            StubHttpMessageHandler.Returning(HttpStatusCode.BadGateway, body, mediaType),
+            options => options.RateLimits.Enabled = false);
 
         var exception = await Assert.ThrowsAsync<WhatsAppApiException>(() => SendAsync(client));
 
@@ -127,16 +127,14 @@ public class GraphApiClientTests
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, """{"error":{"code":0}}""");
         var client = CreateClient(handler);
 
-        var content = JsonContent.Create(
-            new GraphErrorEnvelope { Error = new GraphError { Code = 7 } },
-            WhatsAppJsonContext.Default.GraphErrorEnvelope);
-
         await client.SendAsync(
-            Tenant,
-            Credentials,
-            HttpMethod.Post,
-            "whatever",
-            content,
+            NewRequest() with
+            {
+                Method = HttpMethod.Post,
+                Content = () => JsonContent.Create(
+                    new GraphErrorEnvelope { Error = new GraphError { Code = 7 } },
+                    WhatsAppJsonContext.Default.GraphErrorEnvelope),
+            },
             WhatsAppJsonContext.Default.GraphErrorEnvelope,
             TestContext.Current.CancellationToken);
 
@@ -174,14 +172,22 @@ public class GraphApiClientTests
             StringComparison.Ordinal);
     }
 
-    private static Task SendAsync(GraphApiClient client) => client.SendAsync(
-        Tenant,
-        Credentials,
-        HttpMethod.Get,
-        "whatever",
-        content: null,
-        WhatsAppJsonContext.Default.GraphErrorEnvelope,
-        TestContext.Current.CancellationToken);
+    internal static GraphRequest NewRequest() => new()
+    {
+        Tenant = WhatsAppTenant.Default,
+        Credentials = Credentials,
+        Method = HttpMethod.Get,
+        Path = "whatever",
+    };
+
+    private static Task SendAsync(
+        GraphApiClient client,
+        string path = "whatever",
+        HttpMethod? method = null) =>
+        client.SendAsync(
+            NewRequest() with { Path = path, Method = method ?? HttpMethod.Get },
+            WhatsAppJsonContext.Default.GraphErrorEnvelope,
+            TestContext.Current.CancellationToken);
 
     private static GraphApiClient CreateClient(
         StubHttpMessageHandler handler,
@@ -190,9 +196,13 @@ public class GraphApiClientTests
         var options = new WhatsAppOptions();
         configure?.Invoke(options);
 
+        var time = new FakeTimeProvider();
+
         return new GraphApiClient(
             new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             new StubCredentialsProvider(Credentials),
-            new StaticOptionsMonitor<WhatsAppOptions>(options));
+            new InMemoryRateLimiter(time),
+            new StaticOptionsMonitor<WhatsAppOptions>(options),
+            time);
     }
 }

@@ -11,4 +11,6 @@ namespace Wapper.Internal;
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(GraphErrorEnvelope))]
+[JsonSerializable(typeof(AppUsage))]
+[JsonSerializable(typeof(Dictionary<string, List<BusinessUseCaseUsage>>), TypeInfoPropertyName = "DictionaryStringListBusinessUseCaseUsage")]
 internal sealed partial class WhatsAppJsonContext : JsonSerializerContext;
