@@ -450,6 +450,50 @@ public class MessagesApiTests
     }
 
     [Fact]
+    public async Task A_template_can_fill_in_a_copy_code_button_and_a_map_header()
+    {
+        // Both were declarable on a template and unsendable: there was no parameter for the
+        // code, and none for the point a location header shows.
+        var (messages, handler) = Create();
+
+        await messages.SendTemplateAsync(
+            "79000000001",
+            new TemplateMessage
+            {
+                Name = "seasonal_offer",
+                Language = "en_US",
+                Components =
+                [
+                    TemplateComponent.Header(TemplateParameter.FromLocation(new Location
+                    {
+                        Latitude = 37.483307,
+                        Longitude = -122.148981,
+                        Name = "Our shop",
+                        Address = "1 Hacker Way",
+                    })),
+                    TemplateComponent.CopyCodeButton(0, "SUMMER25"),
+                ],
+            },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var components = Body(handler).GetProperty("template").GetProperty("components");
+
+        var location = components[0].GetProperty("parameters")[0].GetProperty("location");
+        // Strings here, unlike a location message, which takes numbers.
+        Assert.Equal("37.483307", location.GetProperty("latitude").GetString());
+        Assert.Equal("-122.148981", location.GetProperty("longitude").GetString());
+        Assert.Equal("Our shop", location.GetProperty("name").GetString());
+
+        var button = components[1];
+        Assert.Equal("copy_code", button.GetProperty("sub_type").GetString());
+        Assert.Equal("0", button.GetProperty("index").GetString());
+
+        var coupon = button.GetProperty("parameters")[0];
+        Assert.Equal("coupon_code", coupon.GetProperty("type").GetString());
+        Assert.Equal("SUMMER25", coupon.GetProperty("coupon_code").GetString());
+    }
+
+    [Fact]
     public async Task A_flow_message_carries_the_token_the_reply_comes_back_with()
     {
         var (messages, handler) = Create();

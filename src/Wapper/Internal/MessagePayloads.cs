@@ -473,11 +473,39 @@ internal sealed class TemplateParameterPayload
     [JsonPropertyName("document")]
     public MediaPayload? Document { get; set; }
 
+    [JsonPropertyName("coupon_code")]
+    public string? CouponCode { get; set; }
+
+    [JsonPropertyName("location")]
+    public TemplateLocationPayload? Location { get; set; }
+
     [JsonPropertyName("currency")]
     public TemplateCurrencyPayload? Currency { get; set; }
 
     [JsonPropertyName("date_time")]
     public TemplateDateTimePayload? DateTime { get; set; }
+}
+
+/// <summary>
+/// A point on the map inside a template parameter.
+/// </summary>
+/// <remarks>
+/// Not <see cref="LocationPayload"/>: here Meta wants the coordinates as strings, where the
+/// location message takes them as numbers.
+/// </remarks>
+internal sealed class TemplateLocationPayload
+{
+    [JsonPropertyName("latitude")]
+    public string? Latitude { get; set; }
+
+    [JsonPropertyName("longitude")]
+    public string? Longitude { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("address")]
+    public string? Address { get; set; }
 }
 
 internal sealed class TemplateCurrencyPayload

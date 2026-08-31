@@ -316,6 +316,17 @@ internal static class MessageMapping
         Image = parameter.Type == "image" ? parameter.Media!.Value.ToPayload() : null,
         Video = parameter.Type == "video" ? parameter.Media!.Value.ToPayload() : null,
         Document = parameter.Type == "document" ? parameter.Media!.Value.ToPayload() : null,
+        CouponCode = parameter.CouponCode,
+        Location = parameter.Location is { } point
+            ? new TemplateLocationPayload
+            {
+                // Strings here, unlike the location message, which takes numbers.
+                Latitude = point.Latitude.ToString(CultureInfo.InvariantCulture),
+                Longitude = point.Longitude.ToString(CultureInfo.InvariantCulture),
+                Name = point.Name,
+                Address = point.Address,
+            }
+            : null,
         Currency = parameter.Currency is { } currency
             ? new TemplateCurrencyPayload
             {
