@@ -160,6 +160,20 @@ internal sealed class GraphApiClient(
             "configured. Set WhatsApp:WhatsAppBusinessAccountId, or return it from your " +
             $"{nameof(IWhatsAppCredentialsProvider)}.");
 
+    /// <summary>
+    /// The Meta app id, which the resumable upload endpoint is addressed to.
+    /// </summary>
+    /// <remarks>
+    /// Optional in configuration for the same reason as the business account id: only one
+    /// endpoint needs it, and most applications never call it.
+    /// </remarks>
+    internal static string RequireApp(WhatsAppCredentials credentials) =>
+        credentials.AppId
+        ?? throw new WhatsAppConfigurationException(
+            "Uploading a file to Meta is addressed to your app rather than to a WhatsApp " +
+            "object, and the app id is not configured. Set WhatsApp:AppId, or return it from " +
+            $"your {nameof(IWhatsAppCredentialsProvider)}.");
+
     internal static Uri BuildUri(WhatsAppOptions options, string path)
     {
         // A leading slash on the relative part would drop the base path, and a base address
@@ -253,6 +267,7 @@ internal sealed class GraphApiClient(
         };
         httpRequest.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", request.Credentials.AccessToken);
+        request.Configure?.Invoke(httpRequest);
 
         // The shared HttpClient has no timeout of its own so that each tenant can set one.
         using var timeout = new CancellationTokenSource(tenantOptions.Timeout);

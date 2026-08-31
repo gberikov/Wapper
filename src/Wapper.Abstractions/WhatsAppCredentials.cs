@@ -17,4 +17,11 @@ public sealed record WhatsAppCredentials
     /// optional for an application that merely sends messages.
     /// </summary>
     public string? WhatsAppBusinessAccountId { get; init; }
+
+    /// <summary>
+    /// Identifier of the Meta app the token belongs to. Only the resumable upload endpoint —
+    /// which is how a business profile picture is set — is addressed to it, so it is optional
+    /// too.
+    /// </summary>
+    public string? AppId { get; init; }
 }

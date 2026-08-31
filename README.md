@@ -238,6 +238,41 @@ Local storage cannot be moved or switched off in place: deregister, then registe
 Register a second time after a display name change is approved — `PhoneNumberNameChanged` with
 `DisplayNameDecision.Approved` is the signal. Re-registering before approval does nothing.
 
+## The business profile
+
+What a recipient sees when they tap the business's name in a thread:
+
+```csharp
+await whatsApp.BusinessProfile.UpdateAsync(
+    new BusinessProfile
+    {
+        About = "Butterflies, and the things butterflies need.",
+        Email = "hello@butterflies.example",
+        Vertical = BusinessVertical.Retail,
+        Websites = ["https://www.butterflies.example"],
+    },
+    cancellationToken: ct);
+```
+
+The update merges: a property left `null` keeps its current value, and an empty string clears
+it. Every length limit — 139 characters of About, 512 of description, two websites — is checked
+before the call, because Meta rejects all of them with the same bare `100` that never says which
+field it objected to.
+
+The picture is the odd one out. It is set by uploading a file to Meta and writing back the
+handle, so it goes through the Resumable Upload API — which is addressed to the Meta app rather
+than to the phone number, wants the token under the `OAuth` scheme instead of `Bearer`, and is
+the only thing in this library that needs `WhatsApp:AppId`:
+
+```csharp
+await using var picture = File.OpenRead("logo.png");
+await whatsApp.BusinessProfile.SetPictureAsync(picture, "image/png", cancellationToken: ct);
+```
+
+Reading is the usual story: Graph answers a bare read with the messaging product and nothing
+else, so Wapper always names the fields. The profile comes back wrapped in a one-element array
+even though a number has exactly one, and an empty array means nobody has filled it in.
+
 ## Running in more than one instance
 
 Meta counts per phone number on its side. Three replicas each pacing themselves against the

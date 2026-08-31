@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Wapper.BusinessProfiles;
 using Wapper.Internal;
 using Wapper.Media;
 using Wapper.Messages;
@@ -19,6 +20,8 @@ internal sealed class WhatsAppTenantClient(GraphApiClient client, string tenant)
     public ITemplatesApi Templates { get; } = new TemplatesApi(client, tenant);
 
     public IPhoneNumbersApi PhoneNumbers { get; } = new PhoneNumbersApi(client, tenant);
+
+    public IBusinessProfileApi BusinessProfile { get; } = new BusinessProfileApi(client, tenant);
 }
 
 /// <summary>
@@ -43,6 +46,8 @@ internal sealed class WhatsAppClient(GraphApiClient client) : IWhatsAppClient
     public ITemplatesApi Templates => _default.Templates;
 
     public IPhoneNumbersApi PhoneNumbers => _default.PhoneNumbers;
+
+    public IBusinessProfileApi BusinessProfile => _default.BusinessProfile;
 
     public IWhatsAppTenantClient For(string tenant)
     {
