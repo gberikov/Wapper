@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Wapper;
 using Wapper.Internal;
+using Wapper.RateLimiting;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -84,6 +85,11 @@ public static class WhatsAppServiceCollectionExtensions
 
         // Replaced by the host when credentials come from somewhere other than configuration.
         services.TryAddSingleton<IWhatsAppCredentialsProvider, OptionsCredentialsProvider>();
+
+        // Replaced by the Redis package when the application runs in more than one instance.
+        services.TryAddSingleton<IWhatsAppRateLimiter, InMemoryRateLimiter>();
+
+        services.TryAddSingleton(TimeProvider.System);
 
         return services
             .AddHttpClient<GraphApiClient>(HttpClientName)
