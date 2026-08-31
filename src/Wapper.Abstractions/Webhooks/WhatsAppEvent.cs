@@ -54,7 +54,64 @@ public abstract record IncomingMessage : WhatsAppEvent
 
     /// <summary>Whether the customer forwarded this from somewhere else.</summary>
     public bool IsForwarded { get; init; }
+
+    /// <summary>
+    /// The ad or post the customer came from, when they arrived through one.
+    /// </summary>
+    /// <remarks>
+    /// Present on the first message of a conversation started from a Click-to-WhatsApp ad or
+    /// a Facebook page post. This is the only place the attribution appears, and the
+    /// conversation it opens is free of charge — so an application that reports on ad spend
+    /// has to read it here or not at all.
+    /// </remarks>
+    public MessageReferral? Referral { get; init; }
+
+    /// <summary>
+    /// The catalogue item the customer was looking at when they wrote, when they quoted one.
+    /// </summary>
+    public ReferredProduct? ReferredProduct { get; init; }
 }
+
+/// <summary>Where a customer came from, when they arrived through an ad or a post.</summary>
+public sealed record MessageReferral
+{
+    /// <summary>The ad or post itself.</summary>
+    public string? SourceUrl { get; init; }
+
+    /// <summary>What it was: <c>ad</c> or <c>post</c>.</summary>
+    public string? SourceType { get; init; }
+
+    /// <summary>Identifier of the ad or post, which is what ties this to a campaign.</summary>
+    public string? SourceId { get; init; }
+
+    /// <summary>Its headline.</summary>
+    public string? Headline { get; init; }
+
+    /// <summary>Its body text.</summary>
+    public string? Body { get; init; }
+
+    /// <summary>What the ad showed: <c>image</c> or <c>video</c>.</summary>
+    public string? MediaType { get; init; }
+
+    /// <summary>The image, for an image ad.</summary>
+    public string? ImageUrl { get; init; }
+
+    /// <summary>The video, for a video ad.</summary>
+    public string? VideoUrl { get; init; }
+
+    /// <summary>Its thumbnail.</summary>
+    public string? ThumbnailUrl { get; init; }
+
+    /// <summary>
+    /// The click identifier, for matching this conversation against Meta's ad reporting.
+    /// </summary>
+    public string? ClickId { get; init; }
+}
+
+/// <summary>A catalogue item a customer quoted.</summary>
+/// <param name="CatalogId">Which catalogue.</param>
+/// <param name="ProductRetailerId">The item's identifier within it.</param>
+public readonly record struct ReferredProduct(string? CatalogId, string? ProductRetailerId);
 
 /// <summary>A text message.</summary>
 public sealed record TextMessage : IncomingMessage
@@ -188,6 +245,70 @@ public sealed record TemplateButtonReply : IncomingMessage
 }
 
 /// <summary>
+/// A customer filled in a Flow and submitted it.
+/// </summary>
+/// <remarks>
+/// The other half of sending a Flow, and the only place its answers arrive. WhatsApp shows
+/// the customer a summary in the chat; what the screens actually collected is in
+/// <see cref="ResponseJson"/>, whose shape is the Flow's own and therefore yours to parse.
+/// </remarks>
+public sealed record FlowReply : IncomingMessage
+{
+    /// <summary>What WhatsApp showed in the chat once the form was submitted.</summary>
+    public string? Body { get; init; }
+
+    /// <summary>The name Meta echoes back. In practice always <c>flow</c>.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// The answers, as the JSON document the Flow's screens produced.
+    /// </summary>
+    /// <remarks>
+    /// Carries the <c>flow_token</c> the Flow was sent with, which is how a submission is
+    /// matched to the customer and the thing they were doing.
+    /// </remarks>
+    public string ResponseJson { get; init; } = string.Empty;
+}
+
+/// <summary>An order a customer placed from a catalogue.</summary>
+public sealed record OrderMessage : IncomingMessage
+{
+    /// <summary>The catalogue it came from.</summary>
+    public string? CatalogId { get; init; }
+
+    /// <summary>What the customer wrote alongside it.</summary>
+    public string? Text { get; init; }
+
+    /// <summary>What they ordered.</summary>
+    public IReadOnlyList<OrderProduct> Products { get; init; } = [];
+}
+
+/// <summary>One line of an order.</summary>
+public sealed record OrderProduct
+{
+    /// <summary>The item's identifier within the catalogue.</summary>
+    public string? ProductRetailerId { get; init; }
+
+    /// <summary>How many.</summary>
+    public int Quantity { get; init; }
+
+    /// <summary>The price each, as the catalogue had it when the order was placed.</summary>
+    public decimal ItemPrice { get; init; }
+
+    /// <summary>Its currency.</summary>
+    public string? Currency { get; init; }
+}
+
+/// <summary>
+/// A customer opened the chat for the first time and has not written anything yet.
+/// </summary>
+/// <remarks>
+/// The cue for a welcome message. It only arrives for accounts where Meta has the feature
+/// switched on, so it is a nicety to handle rather than something to depend on.
+/// </remarks>
+public sealed record WelcomeRequest : IncomingMessage;
+
+/// <summary>
 /// A notice from WhatsApp itself rather than from a person, such as a customer changing
 /// their number.
 /// </summary>
@@ -274,8 +395,53 @@ public sealed record MessageStatusChanged : WhatsAppEvent
     /// <summary>Whether Meta charged for it.</summary>
     public bool? Billable { get; init; }
 
+    /// <summary>Which rate it was charged at, such as <c>marketing</c> or <c>service</c>.</summary>
+    public string? PricingType { get; init; }
+
+    /// <summary>
+    /// Which pricing model applied, such as <c>PMP</c> for per-message pricing.
+    /// </summary>
+    public string? PricingModel { get; init; }
+
+    /// <summary>
+    /// When the conversation's customer service window closes.
+    /// </summary>
+    /// <remarks>
+    /// Only sent on the status that opens a conversation. Until then a free-form reply is
+    /// allowed; afterwards only a template is, and sending anything else fails with
+    /// <see cref="WhatsAppErrorCodes.ReEngagementRequired"/>.
+    /// </remarks>
+    public DateTimeOffset? ConversationExpiresAt { get; init; }
+
+    /// <summary>
+    /// Whatever was attached to the send as <c>callbackData</c>, echoed back untouched.
+    /// </summary>
+    /// <remarks>
+    /// The way to match a status against your own records without keeping a table of message
+    /// ids: put the order number, or the row id, on the send and read it back here.
+    /// </remarks>
+    public string? CallbackData { get; init; }
+
     /// <summary>Why it failed, when it did.</summary>
     public IReadOnlyList<WhatsAppError> Errors { get; init; } = [];
+}
+
+/// <summary>
+/// A delivery on a webhook field this library has no typed event for.
+/// </summary>
+/// <remarks>
+/// Meta has more than twenty webhook fields and adds to them; this library types the ones it
+/// can act on. Anything else would otherwise be dropped without trace — an account being
+/// offboarded, a customer opting out of marketing, a template's components being rewritten.
+/// It arrives here instead, with the body it came in, so an application can notice and decide.
+/// </remarks>
+public sealed record UnknownEvent : WhatsAppEvent
+{
+    /// <summary>The <c>field</c> of the change, for example <c>account_update</c>.</summary>
+    public string Field { get; init; } = string.Empty;
+
+    /// <summary>The <c>value</c> object, exactly as it arrived.</summary>
+    public string Json { get; init; } = string.Empty;
 }
 
 /// <summary>

@@ -82,6 +82,20 @@ public sealed record TemplateComponent
         Index = index,
         Parameters = [TemplateParameter.FromText(suffix)],
     };
+
+    /// <summary>
+    /// A copy-code button, carrying the code the customer copies.
+    /// </summary>
+    /// <remarks>
+    /// The template declares a sample at review time; this is the real one, per message.
+    /// </remarks>
+    public static TemplateComponent CopyCodeButton(int index, string code) => new()
+    {
+        Type = TemplateComponentType.Button,
+        SubType = "copy_code",
+        Index = index,
+        Parameters = [TemplateParameter.FromCouponCode(code)],
+    };
 }
 
 /// <summary>One value filled into a template placeholder.</summary>
@@ -115,6 +129,12 @@ public sealed record TemplateParameter
 
     /// <summary>What comes back on the webhook, for a quick-reply button.</summary>
     public string? PayloadValue { get; init; }
+
+    /// <summary>The code, for a copy-code button.</summary>
+    public string? CouponCode { get; init; }
+
+    /// <summary>The point, for a template whose header is a map.</summary>
+    public Location? Location { get; init; }
 
     /// <summary>A piece of text.</summary>
     public static TemplateParameter FromText(string text, string? name = null)
@@ -163,6 +183,27 @@ public sealed record TemplateParameter
     {
         ArgumentNullException.ThrowIfNull(payload);
         return new TemplateParameter("payload") { PayloadValue = payload };
+    }
+
+    /// <summary>The code a copy-code button puts on the clipboard.</summary>
+    public static TemplateParameter FromCouponCode(string code)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(code);
+        return new TemplateParameter("coupon_code") { CouponCode = code };
+    }
+
+    /// <summary>
+    /// A point on the map, for a template whose header is a location.
+    /// </summary>
+    /// <remarks>
+    /// The template declares only that it has a map; where it points is supplied per message,
+    /// here. WhatsApp shows the name and address rather than the coordinates, so a location
+    /// with neither renders as a bare pin.
+    /// </remarks>
+    public static TemplateParameter FromLocation(Location location)
+    {
+        ArgumentNullException.ThrowIfNull(location);
+        return new TemplateParameter("location") { Location = location };
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Wapper.Internal;
 using Wapper.Media;
 
@@ -165,13 +166,103 @@ internal static class MessageMapping
             Action = new InteractiveActionPayload
             {
                 Name = "cta_url",
-                Parameters = new CallToActionParametersPayload
+                Parameters = new InteractiveParametersPayload
                 {
                     DisplayText = message.ButtonText,
                     Url = message.Url.AbsoluteUri,
                 },
             },
         };
+    }
+
+    public static InteractivePayload ToPayload(this FlowMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(message.FlowToken);
+
+        if (string.IsNullOrWhiteSpace(message.FlowId) == string.IsNullOrWhiteSpace(message.FlowName))
+        {
+            throw new ArgumentException(
+                "A Flow message names the Flow either by id or by name, and this one names " +
+                (message.FlowId is null ? "neither." : "both."),
+                nameof(message));
+        }
+
+        if (message.Action == FlowAction.Navigate && string.IsNullOrWhiteSpace(message.Screen))
+        {
+            // Meta answers this with a bare 100 that does not mention the screen.
+            throw new ArgumentException(
+                "A Flow that navigates opens on a screen, so Screen has to be set. Use " +
+                $"{nameof(FlowAction)}.{nameof(FlowAction.DataExchange)} to let the Flow's " +
+                "endpoint decide instead.",
+                nameof(message));
+        }
+
+        return new InteractivePayload
+        {
+            Type = "flow",
+            Header = message.Header?.ToPayload(),
+            Body = new InteractiveTextPayload { Text = message.Body },
+            Footer = Footer(message.Footer),
+            Action = new InteractiveActionPayload
+            {
+                Name = "flow",
+                Parameters = new InteractiveParametersPayload
+                {
+                    FlowMessageVersion = "3",
+                    FlowToken = message.FlowToken,
+                    FlowId = message.FlowId,
+                    FlowName = message.FlowName,
+                    FlowCallToAction = message.ButtonText,
+                    FlowAction = message.Action == FlowAction.DataExchange
+                        ? "data_exchange"
+                        : "navigate",
+                    Mode = message.Draft ? "draft" : null,
+                    FlowActionPayload = message.Screen is null && message.DataJson is null
+                        ? null
+                        : new FlowActionPayload
+                        {
+                            Screen = message.Screen,
+                            Data = ParseData(message.DataJson),
+                        },
+                },
+            },
+        };
+    }
+
+    /// <remarks>
+    /// Parsed rather than passed through as a string: the Flow expects an object, and a
+    /// string containing JSON is not one. Parsing here also means a malformed document is a
+    /// clear argument failure instead of a bare 100 from Meta.
+    /// </remarks>
+    private static JsonElement? ParseData(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new ArgumentException(
+                    $"The data handed to a Flow screen is a JSON object, and this is a " +
+                    $"{document.RootElement.ValueKind}.",
+                    nameof(json));
+            }
+
+            return document.RootElement.Clone();
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException(
+                "The data handed to a Flow screen is not valid JSON.",
+                nameof(json),
+                exception);
+        }
     }
 
     public static TemplatePayload ToPayload(this TemplateMessage template)
@@ -225,6 +316,17 @@ internal static class MessageMapping
         Image = parameter.Type == "image" ? parameter.Media!.Value.ToPayload() : null,
         Video = parameter.Type == "video" ? parameter.Media!.Value.ToPayload() : null,
         Document = parameter.Type == "document" ? parameter.Media!.Value.ToPayload() : null,
+        CouponCode = parameter.CouponCode,
+        Location = parameter.Location is { } point
+            ? new TemplateLocationPayload
+            {
+                // Strings here, unlike the location message, which takes numbers.
+                Latitude = point.Latitude.ToString(CultureInfo.InvariantCulture),
+                Longitude = point.Longitude.ToString(CultureInfo.InvariantCulture),
+                Name = point.Name,
+                Address = point.Address,
+            }
+            : null,
         Currency = parameter.Currency is { } currency
             ? new TemplateCurrencyPayload
             {

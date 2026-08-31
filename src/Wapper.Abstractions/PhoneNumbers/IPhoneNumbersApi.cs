@@ -160,4 +160,31 @@ public interface IPhoneNumbersApi
     Task DeregisterAsync(
         string? phoneNumberId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the public key Meta encrypts Flow endpoint traffic with.
+    /// </summary>
+    /// <param name="phoneNumberId">Which number. Defaults to the tenant's own.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The key, or <see langword="null"/> when none has been uploaded.</returns>
+    Task<BusinessEncryptionKey?> GetEncryptionKeyAsync(
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Uploads the public key Meta should encrypt Flow endpoint traffic with.
+    /// </summary>
+    /// <param name="publicKey">
+    /// A 2048-bit RSA public key in PEM form, newlines and all.
+    /// </param>
+    /// <param name="phoneNumberId">Which number. Defaults to the tenant's own.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <remarks>
+    /// Required before a Flow with an endpoint will run: Meta encrypts every request to that
+    /// endpoint with this key, and refuses to send the Flow at all until there is one.
+    /// </remarks>
+    Task SetEncryptionKeyAsync(
+        string publicKey,
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default);
 }

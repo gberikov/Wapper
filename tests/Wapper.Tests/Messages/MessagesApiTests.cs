@@ -170,7 +170,7 @@ public class MessagesApiTests
         await messages.RemoveReactionAsync(
             "79000000001",
             "wamid.HBgL",
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var reaction = Body(handler).GetProperty("reaction");
         Assert.Equal("wamid.HBgL", reaction.GetProperty("message_id").GetString());
@@ -447,6 +447,206 @@ public class MessagesApiTests
             limiter.Requested,
             r => r.Scope.Budget == RateLimitBudget.RecipientPair
                  && r.Scope.Key.Contains("79000000001", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_template_can_fill_in_a_copy_code_button_and_a_map_header()
+    {
+        // Both were declarable on a template and unsendable: there was no parameter for the
+        // code, and none for the point a location header shows.
+        var (messages, handler) = Create();
+
+        await messages.SendTemplateAsync(
+            "79000000001",
+            new TemplateMessage
+            {
+                Name = "seasonal_offer",
+                Language = "en_US",
+                Components =
+                [
+                    TemplateComponent.Header(TemplateParameter.FromLocation(new Location
+                    {
+                        Latitude = 37.483307,
+                        Longitude = -122.148981,
+                        Name = "Our shop",
+                        Address = "1 Hacker Way",
+                    })),
+                    TemplateComponent.CopyCodeButton(0, "SUMMER25"),
+                ],
+            },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var components = Body(handler).GetProperty("template").GetProperty("components");
+
+        var location = components[0].GetProperty("parameters")[0].GetProperty("location");
+        // Strings here, unlike a location message, which takes numbers.
+        Assert.Equal("37.483307", location.GetProperty("latitude").GetString());
+        Assert.Equal("-122.148981", location.GetProperty("longitude").GetString());
+        Assert.Equal("Our shop", location.GetProperty("name").GetString());
+
+        var button = components[1];
+        Assert.Equal("copy_code", button.GetProperty("sub_type").GetString());
+        Assert.Equal("0", button.GetProperty("index").GetString());
+
+        var coupon = button.GetProperty("parameters")[0];
+        Assert.Equal("coupon_code", coupon.GetProperty("type").GetString());
+        Assert.Equal("SUMMER25", coupon.GetProperty("coupon_code").GetString());
+    }
+
+    [Fact]
+    public async Task A_flow_message_carries_the_token_the_reply_comes_back_with()
+    {
+        var (messages, handler) = Create();
+
+        await messages.SendFlowAsync(
+            "79000000001",
+            new FlowMessage
+            {
+                FlowId = "1122334455",
+                FlowToken = "booking-42",
+                ButtonText = "Book a table",
+                Body = "Pick a time that suits you.",
+                Screen = "BOOK",
+                DataJson = """{"seats":4}""",
+            },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var interactive = Body(handler).GetProperty("interactive");
+        Assert.Equal("flow", interactive.GetProperty("type").GetString());
+
+        var parameters = interactive.GetProperty("action").GetProperty("parameters");
+        Assert.Equal("3", parameters.GetProperty("flow_message_version").GetString());
+        Assert.Equal("booking-42", parameters.GetProperty("flow_token").GetString());
+        Assert.Equal("1122334455", parameters.GetProperty("flow_id").GetString());
+        Assert.Equal("Book a table", parameters.GetProperty("flow_cta").GetString());
+        Assert.Equal("navigate", parameters.GetProperty("flow_action").GetString());
+        // Published unless asked otherwise; the draft warning is not something to ship.
+        Assert.False(parameters.TryGetProperty("mode", out _));
+
+        var payload = parameters.GetProperty("flow_action_payload");
+        Assert.Equal("BOOK", payload.GetProperty("screen").GetString());
+        // A JSON object, not a string holding one: the Flow's screens expect the real thing.
+        Assert.Equal(4, payload.GetProperty("data").GetProperty("seats").GetInt32());
+    }
+
+    [Fact]
+    public async Task A_flow_that_asks_its_endpoint_needs_no_screen()
+    {
+        var (messages, handler) = Create();
+
+        await messages.SendFlowAsync(
+            "79000000001",
+            new FlowMessage
+            {
+                FlowName = "booking",
+                FlowToken = "booking-42",
+                ButtonText = "Book",
+                Body = "Pick a time.",
+                Action = FlowAction.DataExchange,
+                Draft = true,
+            },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var parameters = Body(handler)
+            .GetProperty("interactive")
+            .GetProperty("action")
+            .GetProperty("parameters");
+
+        Assert.Equal("data_exchange", parameters.GetProperty("flow_action").GetString());
+        Assert.Equal("booking", parameters.GetProperty("flow_name").GetString());
+        Assert.Equal("draft", parameters.GetProperty("mode").GetString());
+    }
+
+    [Theory]
+    [MemberData(nameof(RefusedFlowMessages))]
+    public async Task A_flow_message_that_could_only_fail_is_refused_before_the_call(
+        FlowMessage message,
+        string expected)
+    {
+        // Meta answers every one of these with a bare 100 that never says which field it
+        // objected to.
+        var (messages, handler) = Create();
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            messages.SendFlowAsync(
+                "79000000001",
+                message,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(expected, exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(handler.Requests);
+    }
+
+    public static TheoryData<FlowMessage, string> RefusedFlowMessages() => new()
+    {
+        {
+            new FlowMessage { FlowToken = "t", ButtonText = "b", Body = "x", Screen = "S" },
+            "names neither"
+        },
+        {
+            new FlowMessage
+            {
+                FlowId = "1", FlowName = "one", FlowToken = "t", ButtonText = "b",
+                Body = "x", Screen = "S",
+            },
+            "names both"
+        },
+        {
+            new FlowMessage { FlowId = "1", FlowToken = "t", ButtonText = "b", Body = "x" },
+            "Screen"
+        },
+        {
+            new FlowMessage
+            {
+                FlowId = "1", FlowToken = "t", ButtonText = "b", Body = "x",
+                Screen = "S", DataJson = "{not json",
+            },
+            "not valid JSON"
+        },
+    };
+
+    [Fact]
+    public async Task Callback_data_is_sent_so_the_status_can_be_matched_to_your_own_records()
+    {
+        var (messages, handler) = Create();
+
+        await messages.SendTextAsync(
+            "79000000001",
+            "your order is on its way",
+            callbackData: "order-4711",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "order-4711",
+            Body(handler).GetProperty("biz_opaque_callback_data").GetString());
+    }
+
+    [Fact]
+    public async Task Callback_data_longer_than_Meta_accepts_is_refused_before_the_call()
+    {
+        var (messages, handler) = Create();
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            messages.SendTextAsync(
+                "79000000001",
+                "hello",
+                callbackData: new string('x', 513),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_send_without_callback_data_does_not_carry_the_field()
+    {
+        var (messages, handler) = Create();
+
+        await messages.SendTextAsync(
+            "79000000001",
+            "hello",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(Body(handler).TryGetProperty("biz_opaque_callback_data", out _));
     }
 
     private static JsonElement Body(StubHttpMessageHandler handler) =>

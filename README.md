@@ -53,6 +53,14 @@ public sealed class Orders(IWhatsAppClient whatsApp)
 Sending waits for a rate limit permit and retries what Meta says is worth retrying, so
 `SendButtonsAsync` either returns a `SentMessage` or tells you why it could not.
 
+Every send takes an optional `callbackData`: up to 512 characters of your own that Meta hands
+back untouched on every delivery status the message produces. It is how a status is matched to
+your own records without keeping a table of message ids.
+
+```csharp
+await whatsApp.Messages.SendTextAsync(customer, "on its way", callbackData: orderId, cancellationToken: ct);
+```
+
 ### More than one phone number
 
 Register each one by name and ask for it by name:
@@ -92,6 +100,27 @@ public sealed class Replier(IWhatsAppClient whatsApp) : IWhatsAppEventHandler<Te
 The endpoint answers the subscription handshake, verifies `X-Hub-Signature-256` against the
 raw body, and hands each event to the handlers registered for it. Register a handler for
 `IncomingMessage` or `WhatsAppEvent` to see everything of that shape.
+
+A delivery carries many events, and Meta's only retry is to send the whole delivery again. So
+a handler that throws does not stop the events behind it from being offered — but the delivery
+is still failed, because swallowing it would lose the message for good. **Handlers have to be
+idempotent**, which they have to be anyway: Meta repeats deliveries of its own accord.
+
+Meta has more than twenty webhook fields and keeps adding to them. The ones this library has
+typed events for arrive as those; anything else arrives as `UnknownEvent` carrying the raw
+`value` object, so an account being offboarded or a customer opting out of marketing leaves a
+trace rather than vanishing:
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<Unhandled, UnknownEvent>();
+```
+
+Nothing arrives at all until the app is subscribed to the account — the step that is easy to
+forget and impossible to debug, because the endpoint looks perfectly healthy without it:
+
+```csharp
+await whatsApp.Account.SubscribeAsync(ct);
+```
 
 Two settings are required to receive anything, both from the Meta app dashboard:
 
@@ -168,7 +197,30 @@ Managing templates needs `WhatsAppBusinessAccountId` in configuration; sending m
 not. These calls spend the account's management allowance (200 an hour, 5000 once a number is
 registered), which the client paces separately from message throughput.
 
-Not covered yet: archiving and unarchiving.
+### One-time passcodes
+
+An authentication template carries no text of its own — Meta writes the body and the footer in
+every language it supports, which is the point of the category:
+
+```csharp
+await whatsApp.Templates.CreateAsync(
+    Template.Authentication(
+        "verification_code",
+        "en_US",
+        TemplateButton.AutofillOneTimePassword(
+            [new TemplateApplication("com.example.app", "K2h6uSdG3xY")],
+            autofillText: "Autofill"),
+        codeExpirationMinutes: 10),
+    cancellationToken: ct);
+```
+
+`AutofillOneTimePassword` fills the code straight into your Android app and falls back to
+copying everywhere else, so it is always at least as good as `CopyOneTimePassword`. Get the
+signature hash wrong and the code silently never arrives — Meta matches on it deliberately, so
+a passcode cannot be autofilled into an impostor app.
+
+Not covered yet: carousel and limited-time-offer templates, catalogue and multi-product
+buttons, and archiving.
 
 ## Checking the phone number
 
@@ -322,6 +374,39 @@ await whatsApp.Flows.PublishAsync(created.Id, ct);
 Editing a published Flow drops it back to draft until it is published again. A published Flow
 cannot be deleted — `DeprecateAsync` is how it is retired, and there is no way back from that.
 
+Sending one is a message like any other. The `FlowToken` is the only thing tying a submission
+back to the customer and the thing they were doing, so generate one per send and store what it
+means:
+
+```csharp
+await whatsApp.Messages.SendFlowAsync(
+    customer,
+    new FlowMessage
+    {
+        FlowId = created.Id,
+        FlowToken = $"booking:{bookingId}",
+        ButtonText = "Book a table",
+        Body = "Pick a time that suits you.",
+        Screen = "BOOK",
+    },
+    cancellationToken: ct);
+```
+
+What the customer fills in comes back on the webhook as a `FlowReply`, whose `ResponseJson` is
+the document the Flow's own screens produced — its shape is yours, so it is handed over as
+written:
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<Bookings, FlowReply>();
+```
+
+A Flow that talks to an endpoint needs one more thing, and will not run without it: the public
+key Meta encrypts that traffic with.
+
+```csharp
+await whatsApp.PhoneNumbers.SetEncryptionKeyAsync(publicKeyPem, cancellationToken: ct);
+```
+
 Status changes arrive on the webhook, and so do the monitoring alerts that precede them:
 
 ```csharp
@@ -387,6 +472,24 @@ back too. If Redis becomes unreachable the limiter logs and falls back to pacing
 instance alone — Meta rejects the overshoot, which the retry path already handles, rather
 than a Redis blip becoming a messaging outage. Set `FallBackToLocal = false` to make it
 fatal instead.
+
+## A few things the client refuses to do
+
+The access token is a bearer token: it is worth exactly as much to whoever gets hold of it.
+
+- **`BaseAddress` has to be https.** Loopback is exempt, so a local proxy or a test server does
+  not need a certificate.
+- **A media download only ever goes to Meta's hosts.** A media URL is not a Graph API address —
+  Meta returns a host of its own choosing, and the download needs the token attached — so
+  `MediaInfo.Url` is checked against `RateLimits`-style configuration (`MediaDownloadHosts`,
+  matched whole or on a label boundary) before the token goes anywhere near it. Add to that
+  list if Meta starts using a host this release does not know.
+- **`WhatsAppCredentials.ToString()` leaves the token out**, so logging one — or anything
+  holding one — does not put a working token in the log.
+- **Rate limit exceptions redact the recipient's number**, keeping your own. `Scope.Key` still
+  has it in full for code that deliberately wants it.
+- **A Flow's preview link is only fetched when asked for.** It needs no login and lasts thirty
+  days: `Flows.GetAsync(id, includePreview: true, ...)`, or `GetPreviewAsync`.
 
 ## Licence
 

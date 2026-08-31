@@ -1,3 +1,4 @@
+using Wapper.Accounts;
 using Wapper.Analytics;
 using Wapper.BusinessProfiles;
 using Wapper.Flows;
@@ -25,6 +26,9 @@ public interface IWhatsAppTenantClient
 
     /// <summary>Reading the business phone numbers of the account.</summary>
     IPhoneNumbersApi PhoneNumbers { get; }
+
+    /// <summary>The account itself: which app receives its webhooks.</summary>
+    IWhatsAppAccountApi Account { get; }
 
     /// <summary>Reading and editing the profile shown behind the phone number.</summary>
     IBusinessProfileApi BusinessProfile { get; }

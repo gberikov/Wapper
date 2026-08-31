@@ -12,8 +12,14 @@ namespace Wapper.Messages;
 /// conversation has more than one thread running.
 /// </para>
 /// <para>
+/// Every send also takes an optional <c>callbackData</c>: up to 512 characters of your own
+/// that Meta hands back untouched on every delivery status the message produces. It is the
+/// way to match a status against your own records without keeping a table of message ids.
+/// </para>
+/// <para>
 /// Outside the 24-hour customer service window only a template message is allowed. Anything
-/// else is rejected, whatever it contains.
+/// else is rejected with <see cref="WhatsAppErrorCodes.ReEngagementRequired"/>, whatever it
+/// contains.
 /// </para>
 /// </remarks>
 public interface IMessagesApi
@@ -26,12 +32,14 @@ public interface IMessagesApi
     /// default, because a preview is fetched from the link at send time and slows delivery.
     /// </param>
     /// <param name="replyToMessageId">A message to quote.</param>
+    /// <param name="callbackData">Echoed back on this message's delivery statuses.</param>
     /// <param name="cancellationToken">Cancels the send.</param>
     Task<SentMessage> SendTextAsync(
         string to,
         string text,
         bool previewUrl = false,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends an image.</summary>
@@ -40,6 +48,7 @@ public interface IMessagesApi
         MediaSource media,
         string? caption = null,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a video.</summary>
@@ -48,6 +57,7 @@ public interface IMessagesApi
         MediaSource media,
         string? caption = null,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends audio.</summary>
@@ -56,6 +66,7 @@ public interface IMessagesApi
         string to,
         MediaSource media,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a document.</summary>
@@ -67,6 +78,7 @@ public interface IMessagesApi
     /// falls back to the name recorded at upload time, which is rarely meaningful.
     /// </param>
     /// <param name="replyToMessageId">A message to quote.</param>
+    /// <param name="callbackData">Echoed back on this message's delivery statuses.</param>
     /// <param name="cancellationToken">Cancels the send.</param>
     Task<SentMessage> SendDocumentAsync(
         string to,
@@ -74,6 +86,7 @@ public interface IMessagesApi
         string? caption = null,
         string? fileName = null,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a sticker.</summary>
@@ -82,6 +95,7 @@ public interface IMessagesApi
         string to,
         MediaSource media,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a location.</summary>
@@ -89,6 +103,7 @@ public interface IMessagesApi
         string to,
         Location location,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends one or more contact cards.</summary>
@@ -96,12 +111,14 @@ public interface IMessagesApi
         string to,
         IEnumerable<Contact> contacts,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Reacts to a message with an emoji.</summary>
     /// <param name="to">The other party in the conversation.</param>
     /// <param name="messageId">The message being reacted to.</param>
     /// <param name="emoji">A single emoji.</param>
+    /// <param name="callbackData">Echoed back on this message's delivery statuses.</param>
     /// <param name="cancellationToken">Cancels the send.</param>
     /// <remarks>
     /// A second reaction to the same message replaces the first; there is only ever one
@@ -111,12 +128,14 @@ public interface IMessagesApi
         string to,
         string messageId,
         string emoji,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Takes back a reaction.</summary>
     Task<SentMessage> RemoveReactionAsync(
         string to,
         string messageId,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a message with up to three reply buttons.</summary>
@@ -124,6 +143,7 @@ public interface IMessagesApi
         string to,
         ButtonMessage message,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a message that opens a list of choices.</summary>
@@ -131,6 +151,7 @@ public interface IMessagesApi
         string to,
         ListMessage message,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a message with a single button that opens a link.</summary>
@@ -138,6 +159,23 @@ public interface IMessagesApi
         string to,
         CallToActionMessage message,
         string? replyToMessageId = null,
+        string? callbackData = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends a message that opens a Flow: a form the customer fills in inside WhatsApp.
+    /// </summary>
+    /// <remarks>
+    /// The Flow has to be published — see <c>IFlowsApi</c> — unless
+    /// <see cref="FlowMessage.Draft"/> is set. What the customer submits arrives on the
+    /// webhook as a <c>FlowReply</c> carrying the <see cref="FlowMessage.FlowToken"/> this
+    /// send set, which is the only thing tying the two together.
+    /// </remarks>
+    Task<SentMessage> SendFlowAsync(
+        string to,
+        FlowMessage message,
+        string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Sends a message built from an approved template.</summary>
@@ -146,6 +184,7 @@ public interface IMessagesApi
         string to,
         TemplateMessage template,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
