@@ -28,16 +28,16 @@ idempotent**, which they have to be anyway: Meta repeats deliveries of its own a
 
 Meta has more than twenty webhook fields and keeps adding to them. The ones this library has
 typed events for arrive as those; anything else arrives as `UnknownEvent` carrying the raw
-`value` object, so an account being offboarded or a customer opting out of marketing leaves a
-trace rather than vanishing:
+`value` object, so a capability change or a security alert leaves a trace rather than
+vanishing:
 
 ```csharp
 builder.Services.AddWhatsAppWebhookHandler<Unhandled, UnknownEvent>();
 ```
 
 The same event is where a field this library *does* know lands when it arrives shaped in a
-way the library could not read, so a handler for it is the one place to learn that anything
-is being discarded.
+way the library could not read — including one that bound cleanly and yielded no event at all.
+A handler for it is the one place to learn that anything is being discarded.
 
 ## Delivery statuses
 
@@ -70,6 +70,21 @@ stop:
 ```csharp
 builder.Services.AddWhatsAppWebhookHandler<OptOuts, MarketingPreferenceChanged>();
 ```
+
+## Trouble with the account itself
+
+`AccountUpdated` is where a policy violation, a restriction, a scheduled disablement or a
+deletion arrives. There is no other notice: the next sign is sends failing.
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<Compliance, AccountUpdated>();
+```
+
+`Event` is the one to branch on — `AccountViolation`, `AccountRestriction`, `DisabledUpdate`,
+`AccountDeleted` — with `ViolationType`, `Restrictions` and `BanState` carrying the detail.
+Meta sends about twenty events on this field and half of them only mean something to a
+Solution Partner; those arrive with `Event` as `Unknown`, `RawEvent` naming them and `Json`
+holding the body they came in.
 
 ## Without ASP.NET Core
 
@@ -117,7 +132,7 @@ way.
 | `message_template_quality_update` | Recommended | The warning before a template is paused. → `TemplateQualityChanged` |
 | `flows` | If you use Flows | Status changes and the monitoring alerts that precede them. → `FlowStatusChanged`, `FlowAlert` |
 | `phone_number_name_update` | If display names change | An approved change is the cue to register the number again — without that the new name never takes effect. → `PhoneNumberNameChanged` |
-| `account_update` | Recommended | Policy violations, offboarding, deletion. Arrives as `UnknownEvent`, which is still better than finding out when sends start failing. |
+| `account_update` | Recommended | Policy violations, restrictions, offboarding, deletion. The only place any of that is reported; everything else surfaces as sends failing for reasons that read like a bug. → `AccountUpdated` |
 | `account_alerts`, `business_capability_update`, `message_template_components_update`, `template_category_update`, `security` | Optional | Useful to log; nothing here has to act on them. All arrive as `UnknownEvent`. |
 | `partner_solutions`, `history`, `smb_app_state_sync`, `smb_message_echoes`, `automatic_events`, `payment_configuration_update` | Solution Partners only | Only meaningful to an approved partner onboarding customers, or with a regional payments product. |
 

@@ -12,23 +12,25 @@ public class WebhookCoverageTests
     [Fact]
     public void A_field_with_no_typed_event_is_reported_rather_than_dropped()
     {
-        // Meta has more than twenty webhook fields. Silently dropping one means an account
-        // being offboarded, or a customer opting out of marketing, leaves no trace at all.
+        // Meta has more than twenty webhook fields. Silently dropping one means an alert about
+        // the account, or a customer opting out of marketing, leaves no trace at all.
         const string Body = """
             {"object":"whatsapp_business_account","entry":[{"id":"102290129340398","changes":[
-              {"field":"account_update",
-               "value":{"event":"DISABLED_UPDATE","ban_info":{"waba_ban_state":"SCHEDULE_FOR_DISABLE"}}}]}]}
+              {"field":"account_alerts",
+               "value":{"entity_type":"WABA","entity_id":"102290129340398",
+                        "alert_severity":"CRITICAL","alert_status":"ACTIVE",
+                        "alert_type":"BUSINESS_VERIFICATION_STATUS"}}]}]}
             """;
 
         var unknown = Assert.IsType<UnknownEvent>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
 
-        Assert.Equal("account_update", unknown.Field);
+        Assert.Equal("account_alerts", unknown.Field);
         Assert.Equal("102290129340398", unknown.BusinessAccountId);
 
         // The body comes with it, so an application can act on a field this library has not
         // been taught yet without waiting for a release.
         var value = JsonDocument.Parse(unknown.Json).RootElement;
-        Assert.Equal("DISABLED_UPDATE", value.GetProperty("event").GetString());
+        Assert.Equal("CRITICAL", value.GetProperty("alert_severity").GetString());
     }
 
     [Fact]
@@ -226,9 +228,38 @@ public class WebhookCoverageTests
         Assert.Equal("16505551234", change.WhatsAppId);
         Assert.Equal(MarketingPreference.Stop, change.Preference);
         Assert.Equal("stop", change.RawPreference);
+        Assert.Equal("marketing_messages", change.Category);
         Assert.Equal("106540352242922", change.PhoneNumberId);
         Assert.Equal("102290129340398", change.BusinessAccountId);
         // A number here, unlike every timestamp on a message.
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1731705721), change.Timestamp);
+    }
+
+    [Fact]
+    public void A_preference_change_laid_flat_reads_the_same_as_the_array_form()
+    {
+        // The same change, with the fields on `value` itself and no array at all. Meta sends
+        // both; reading only the array loses the opt-out with no error and no UnknownEvent,
+        // and the price of that is marketing messages to someone who asked for none.
+        const string Body = """
+            {"object":"whatsapp_business_account","entry":[{"id":"102290129340398","changes":[
+              {"field":"user_preferences",
+               "value":{"messaging_product":"whatsapp",
+                "metadata":{"display_phone_number":"15550783881","phone_number_id":"106540352242922"},
+                "contacts":[{"wa_id":"16505551234"}],
+                "wa_id":"16505551234",
+                "detail":"User requested to stop marketing messages",
+                "category":"marketing_messages",
+                "value":"stop",
+                "timestamp":1731705721}}]}]}
+            """;
+
+        var change = Assert.IsType<MarketingPreferenceChanged>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
+
+        Assert.Equal("16505551234", change.WhatsAppId);
+        Assert.Equal(MarketingPreference.Stop, change.Preference);
+        Assert.Equal("marketing_messages", change.Category);
+        Assert.Equal("106540352242922", change.PhoneNumberId);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1731705721), change.Timestamp);
     }
 

@@ -433,20 +433,19 @@ public sealed record MessageStatusChanged : WhatsAppEvent
 /// <para>
 /// Usually a webhook field this library has no event for. Meta has more than twenty and adds
 /// to them; this library types the ones it can act on, and anything else would otherwise be
-/// dropped without trace — an account being offboarded, a template's components being
-/// rewritten. It arrives here instead, with the body it came in, so an application can notice
-/// and decide.
+/// dropped without trace — a security alert, a template's components being rewritten. It
+/// arrives here instead, with the body it came in, so an application can notice and decide.
 /// </para>
 /// <para>
 /// Occasionally a field this library does know — <c>messages</c>, say — shaped in a way it
-/// could not read. That lands here too, under the same <see cref="Field"/>, rather than being
-/// dropped: a handler for this event is the one place to find out that something is being
-/// discarded.
+/// could not read, or one that read cleanly and yielded no event at all. Those land here too,
+/// under the same <see cref="Field"/>, rather than being dropped: a handler for this event is
+/// the one place to find out that something is being discarded.
 /// </para>
 /// </remarks>
 public sealed record UnknownEvent : WhatsAppEvent
 {
-    /// <summary>The <c>field</c> of the change, for example <c>account_update</c>.</summary>
+    /// <summary>The <c>field</c> of the change, for example <c>account_alerts</c>.</summary>
     public string Field { get; init; } = string.Empty;
 
     /// <summary>The <c>value</c> object, exactly as it arrived.</summary>

@@ -82,6 +82,13 @@ internal sealed class WebhookValue
     [JsonPropertyName("other_info")]
     public WebhookOtherInfo? OtherInfo { get; set; }
 
+    /// <summary>
+    /// Where the review's own words about a rejection live, rather than in
+    /// <see cref="OtherInfo"/>.
+    /// </summary>
+    [JsonPropertyName("rejection_info")]
+    public WebhookRejectionInfo? RejectionInfo { get; set; }
+
     [JsonPropertyName("previous_quality_score")]
     public string? PreviousQualityScore { get; set; }
 
@@ -156,6 +163,82 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("user_preferences")]
     public List<WebhookUserPreference>? UserPreferences { get; set; }
+
+    // The same change also arrives flat, with the fields of one preference on `value` itself
+    // and no array at all. Both forms are live, so both are read.
+
+    [JsonPropertyName("wa_id")]
+    public string? WaId { get; set; }
+
+    [JsonPropertyName("detail")]
+    public string? Detail { get; set; }
+
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+
+    /// <summary>The preference itself, <c>stop</c> or <c>resume</c>, on the flat form.</summary>
+    [JsonPropertyName("value")]
+    public string? PreferenceValue { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Timestamp { get; set; }
+
+    // Account events. Account-level like the template ones, and carrying a different
+    // sub-object for each of the twenty-odd values `event` can take.
+
+    /// <summary>
+    /// Sent both as an object and as a bare string, so it stays raw until it is read.
+    /// </summary>
+    [JsonPropertyName("phone_number")]
+    public JsonElement PhoneNumber { get; set; }
+
+    [JsonPropertyName("ban_info")]
+    public WebhookBanInfo? BanInfo { get; set; }
+
+    [JsonPropertyName("violation_info")]
+    public WebhookViolationInfo? ViolationInfo { get; set; }
+
+    [JsonPropertyName("restriction_info")]
+    public List<WebhookRestriction>? RestrictionInfo { get; set; }
+}
+
+internal sealed class WebhookBanInfo
+{
+    [JsonPropertyName("waba_ban_state")]
+    public string? WabaBanState { get; set; }
+
+    [JsonPropertyName("waba_ban_date")]
+    public string? WabaBanDate { get; set; }
+}
+
+internal sealed class WebhookViolationInfo
+{
+    [JsonPropertyName("violation_type")]
+    public string? ViolationType { get; set; }
+}
+
+internal sealed class WebhookRestriction
+{
+    [JsonPropertyName("restriction_type")]
+    public string? RestrictionType { get; set; }
+
+    /// <summary>Unix seconds, sent as a number.</summary>
+    [JsonPropertyName("expiration")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Expiration { get; set; }
+
+    [JsonPropertyName("remediation")]
+    public string? Remediation { get; set; }
+}
+
+internal sealed class WebhookRejectionInfo
+{
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("recommendation")]
+    public string? Recommendation { get; set; }
 }
 
 internal sealed class WebhookUserPreference

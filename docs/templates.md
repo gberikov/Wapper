@@ -30,6 +30,11 @@ so handle it rather than polling.
 builder.Services.AddWhatsAppWebhookHandler<TemplateWatcher, TemplateStatusChanged>();
 ```
 
+On a rejection, `Reason` is a category — `InvalidFormat` — and says nothing about what to
+change. `Details` and `Recommendation` carry the review's own words: *"Your template has
+parameters placed next to each other"*, *"Separate parameters with descriptive text"*. Put
+both in front of whoever has to fix the template.
+
 Prefer named parameters over numbered ones. Numbered placeholders are matched by position, so
 inserting one renumbers everything after it — in the template *and* in every call site that
 sends it.

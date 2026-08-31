@@ -70,7 +70,7 @@ is missing is the typed, validated, documented version.
   `history`, the `smb_*` sync fields. These need advanced access granted through App Review to
   an approved Solution Partner, so they cannot be exercised, let alone tested, without that
   status.
-- **Webhook fields with no typed event** — `account_update`, `business_capability_update`,
+- **Webhook fields with no typed event** — `account_alerts`, `business_capability_update`,
   `security` and the rest arrive as `UnknownEvent` carrying their body, so nothing is lost;
   they are simply not modelled.
 

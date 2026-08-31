@@ -63,26 +63,32 @@ public static class WhatsAppWebhookParser
         string businessAccountId,
         List<WhatsAppEvent> events)
     {
-        // Template, phone number and Flow events belong to the account rather than to a
-        // number and carry no metadata at all, so they are read before a phone number is
+        var before = events.Count;
+
+        // Template, phone number, account and Flow events belong to the account rather than
+        // to a number and carry no metadata at all, so they are read before a phone number is
         // insisted on.
         switch (field)
         {
             case "message_template_status_update" when Bind(value) is { } status:
                 events.Add(ToStatusChange(status, businessAccountId));
-                return;
+                break;
 
             case "message_template_quality_update" when Bind(value) is { } quality:
                 events.Add(ToQualityChange(quality, businessAccountId));
-                return;
+                break;
 
             case "phone_number_quality_update" when Bind(value) is { } numberQuality:
                 events.Add(ToPhoneNumberQualityChange(numberQuality, businessAccountId));
-                return;
+                break;
 
             case "phone_number_name_update" when Bind(value) is { } name:
                 events.Add(ToPhoneNumberNameChange(name, businessAccountId));
-                return;
+                break;
+
+            case "account_update" when Bind(value) is { } account:
+                events.Add(ToAccountUpdate(account, value, businessAccountId));
+                break;
 
             // One field carries both the status changes and the monitoring alerts, told apart
             // by `event`.
@@ -90,30 +96,46 @@ public static class WhatsAppWebhookParser
                 events.Add(flow.Event == "FLOW_STATUS_CHANGE"
                     ? ToFlowStatusChange(flow, businessAccountId)
                     : ToFlowAlert(flow, businessAccountId));
-                return;
+                break;
 
             case "messages" when Bind(value) is { } messages:
-                CollectMessages(messages, businessAccountId, events);
-                return;
+                CollectMessages(messages, value, businessAccountId, events);
+                break;
 
             case "user_preferences" when Bind(value) is { } preferences:
-                CollectPreferences(preferences, businessAccountId, events);
-                return;
+                CollectPreferences(preferences, value, businessAccountId, events);
+                break;
 
             default:
                 // Meta has more than twenty webhook fields and keeps adding to them. Dropping
-                // one leaves no trace of an account being offboarded, so it is reported with
-                // the body it arrived in instead. A field this library does know but could
-                // not read lands here too, for the same reason: the alternative is silence.
-                events.Add(new UnknownEvent
-                {
-                    BusinessAccountId = businessAccountId,
-                    Field = field ?? string.Empty,
-                    Json = value.ValueKind == JsonValueKind.Undefined ? string.Empty : value.GetRawText(),
-                });
-                return;
+                // one leaves no trace of a security alert or a capability being withdrawn, so
+                // it is reported with the body it arrived in instead. A field this library
+                // does know but could not read lands here too, for the same reason: the
+                // alternative is silence.
+                events.Add(Unreadable(field, value, businessAccountId));
+                break;
+        }
+
+        if (events.Count == before)
+        {
+            // The field bound cleanly and yielded nothing: a shape this library could read
+            // but found no event in. Silence here is the worst of the failure modes, because
+            // there is nowhere left to notice it, so it is reported like any other change
+            // that could not be turned into an event.
+            events.Add(Unreadable(field, value, businessAccountId));
         }
     }
+
+    /// <summary>
+    /// Reports a change this library could not turn into an event, with the body it arrived
+    /// in.
+    /// </summary>
+    private static UnknownEvent Unreadable(string? field, JsonElement value, string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        Field = field ?? string.Empty,
+        Json = value.ValueKind == JsonValueKind.Undefined ? string.Empty : value.GetRawText(),
+    };
 
     /// <summary>
     /// Binds the <c>value</c> object of a change this library has an event for.
@@ -144,16 +166,35 @@ public static class WhatsAppWebhookParser
 
     private static void CollectPreferences(
         WebhookValue value,
+        JsonElement raw,
         string businessAccountId,
         List<WhatsAppEvent> events)
     {
         var phoneNumberId = value.Metadata?.PhoneNumberId ?? string.Empty;
         var display = value.Metadata?.DisplayPhoneNumber;
 
-        foreach (var preference in value.UserPreferences ?? [])
+        // Meta sends this change two ways: an array of preferences, and — with no array at
+        // all — one preference laid flat on `value` itself. Reading only the array loses an
+        // opt-out silently, and the price of that is marketing messages to someone who asked
+        // for none, which is a spam complaint and a quality rating.
+        List<WebhookUserPreference> preferences = value.UserPreferences is { Count: > 0 } array
+            ? array
+            : [new WebhookUserPreference
+            {
+                WaId = value.WaId,
+                Detail = value.Detail,
+                Category = value.Category,
+                Value = value.PreferenceValue,
+                Timestamp = value.Timestamp,
+            }];
+
+        foreach (var preference in preferences)
         {
             if (preference.WaId is not { } customer)
             {
+                // Neither shape carried a customer. Reported rather than skipped: an opt-out
+                // that goes missing costs sends to somebody who asked for none.
+                events.Add(Unreadable("user_preferences", raw, businessAccountId));
                 continue;
             }
 
@@ -173,6 +214,7 @@ public static class WhatsAppWebhookParser
                     _ => MarketingPreference.Unknown,
                 },
                 RawPreference = preference.Value,
+                Category = preference.Category,
                 Detail = preference.Detail,
             });
         }
@@ -180,33 +222,39 @@ public static class WhatsAppWebhookParser
 
     private static void CollectMessages(
         WebhookValue value,
+        JsonElement raw,
         string businessAccountId,
         List<WhatsAppEvent> events)
     {
         // The phone number is the only identifier this payload carries, and without it there
-        // is no saying which number an event belongs to.
+        // is no saying which number an event belongs to. Meta always sends it, so this is a
+        // shape nobody has seen — which is exactly why it is reported rather than dropped:
+        // an incoming message vanishing is not something an application can find out about
+        // any other way.
         var phoneNumberId = value.Metadata?.PhoneNumberId;
         if (string.IsNullOrEmpty(phoneNumberId))
         {
+            events.Add(Unreadable("messages", raw, businessAccountId));
             return;
         }
 
         var display = value.Metadata?.DisplayPhoneNumber;
 
+        // A message with no id or no sender, or a status with no id or no recipient, is
+        // reported rather than skipped. The body of the whole change comes along, since one
+        // item of it has no raw form of its own by this point.
         foreach (var message in value.Messages ?? [])
         {
-            if (ToEvent(message, value, phoneNumberId, display, businessAccountId) is { } converted)
-            {
-                events.Add(converted);
-            }
+            events.Add(
+                ToEvent(message, value, phoneNumberId, display, businessAccountId)
+                ?? Unreadable("messages", raw, businessAccountId));
         }
 
         foreach (var status in value.Statuses ?? [])
         {
-            if (ToEvent(status, phoneNumberId, display, businessAccountId) is { } converted)
-            {
-                events.Add(converted);
-            }
+            events.Add(
+                ToEvent(status, phoneNumberId, display, businessAccountId)
+                ?? Unreadable("messages", raw, businessAccountId));
         }
 
         foreach (var error in value.Errors ?? [])
@@ -231,7 +279,70 @@ public static class WhatsAppWebhookParser
         RawEvent = value.Event,
         Reason = ParseReason(value.Reason),
         RawReason = value.Reason,
-        Details = value.OtherInfo?.Description ?? value.OtherInfo?.Title,
+        // A rejection puts the part a human needs in `rejection_info`, not in `other_info`.
+        // Reading only the latter leaves an operator with a bare INVALID_FORMAT and no idea
+        // what to change.
+        Details = value.OtherInfo?.Description
+            ?? value.OtherInfo?.Title
+            ?? value.RejectionInfo?.Reason,
+        Recommendation = value.RejectionInfo?.Recommendation,
+    };
+
+    private static AccountUpdated ToAccountUpdate(
+        WebhookValue value,
+        JsonElement raw,
+        string businessAccountId)
+    {
+        // Sent as an object on some events and as a bare string on others; both forms are
+        // live, and the string one is what Meta's own test delivery sends.
+        var number = value.PhoneNumber;
+        var nested = number.ValueKind == JsonValueKind.Object;
+
+        return new AccountUpdated
+        {
+            BusinessAccountId = businessAccountId,
+            Event = ParseAccountEvent(value.Event),
+            RawEvent = value.Event,
+            PhoneNumber = nested ? Property(number, "display_phone_number") : Text(number),
+            QualityRating = PhoneNumberMapping.ParseQuality(
+                nested ? Property(number, "quality_rating") : null),
+            CurrentLimit = PhoneNumberMapping.ParseTier(value.CurrentLimit),
+            BanState = value.BanInfo?.WabaBanState,
+            BanDate = value.BanInfo?.WabaBanDate,
+            ViolationType = value.ViolationInfo?.ViolationType,
+            Restrictions = [.. (value.RestrictionInfo ?? []).Select(restriction => new AccountRestriction
+            {
+                Type = restriction.RestrictionType,
+                ExpiresAt = restriction.Expiration is { } seconds
+                    ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+                    : null,
+                Remediation = restriction.Remediation,
+            })],
+            Json = raw.GetRawText(),
+        };
+    }
+
+    /// <summary>Reads a string property, or nothing when it is absent or not a string.</summary>
+    private static string? Property(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) ? Text(property) : null;
+
+    /// <summary>Reads an element as a string, or nothing when it is not one.</summary>
+    private static string? Text(JsonElement value) =>
+        value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static AccountUpdateEvent ParseAccountEvent(string? name) => name?.ToUpperInvariant() switch
+    {
+        "VERIFIED_ACCOUNT" => AccountUpdateEvent.VerifiedAccount,
+        "ACCOUNT_VIOLATION" => AccountUpdateEvent.AccountViolation,
+        "ACCOUNT_RESTRICTION" => AccountUpdateEvent.AccountRestriction,
+        "DISABLED_UPDATE" => AccountUpdateEvent.DisabledUpdate,
+        "ACCOUNT_DELETED" => AccountUpdateEvent.AccountDeleted,
+        "ACCOUNT_OFFBOARDED" => AccountUpdateEvent.AccountOffboarded,
+        "ACCOUNT_RECONNECTED" => AccountUpdateEvent.AccountReconnected,
+        "PHONE_NUMBER_QUALITY_UPDATE" => AccountUpdateEvent.PhoneNumberQualityUpdate,
+        "PARTNER_ADDED" => AccountUpdateEvent.PartnerAdded,
+        "PARTNER_REMOVED" => AccountUpdateEvent.PartnerRemoved,
+        _ => AccountUpdateEvent.Unknown,
     };
 
     private static TemplateQualityChanged ToQualityChange(WebhookValue value, string businessAccountId) => new()

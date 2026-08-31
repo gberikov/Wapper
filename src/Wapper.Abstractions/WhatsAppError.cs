@@ -17,6 +17,15 @@ public sealed record WhatsAppError
     public string? Message { get; init; }
 
     /// <summary>
+    /// A short heading, such as <c>Healthy ecosystem</c>.
+    /// </summary>
+    /// <remarks>
+    /// Only errors reported on the webhook carry one, and on a delivery failure it is
+    /// sometimes all Meta says.
+    /// </remarks>
+    public string? Title { get; init; }
+
+    /// <summary>
     /// The <c>error_data.details</c> string, which usually carries the part a human
     /// actually needs, such as <c>Cloud API message throughput has been reached.</c>
     /// </summary>

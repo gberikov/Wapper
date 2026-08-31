@@ -12,4 +12,8 @@
     <ProjectReference Include="../Wapper/Wapper.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wapper.Tests" />
+  </ItemGroup>
+
 </Project>

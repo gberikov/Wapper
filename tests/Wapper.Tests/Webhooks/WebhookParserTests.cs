@@ -269,16 +269,21 @@ public class WebhookParserTests
               "recipient_id": "79000000001",
               "errors": [{
                 "code": {{WhatsAppErrorCodes.UserOptedOut}},
-                "title": "Marketing message not delivered",
+                "title": "Healthy ecosystem",
                 "error_data": {"details": "This message was not delivered."}
               }]
             }]
             """));
 
         var status = Assert.IsType<MessageStatusChanged>(Assert.Single(events));
+        var error = Assert.Single(status.Errors);
 
         Assert.Equal(MessageDeliveryStatus.Failed, status.Status);
-        Assert.Equal(WhatsAppErrorCodes.UserOptedOut, Assert.Single(status.Errors).Code);
+        Assert.Equal(WhatsAppErrorCodes.UserOptedOut, error.Code);
+        // On a webhook the title is sometimes the whole of what Meta says. There is no
+        // `message` on this one at all.
+        Assert.Equal("Healthy ecosystem", error.Title);
+        Assert.Null(error.Message);
     }
 
     [Fact]
@@ -345,10 +350,12 @@ public class WebhookParserTests
     }
 
     [Fact]
-    public void A_change_without_a_phone_number_is_ignored()
+    public void A_change_without_a_phone_number_is_reported_rather_than_dropped()
     {
-        // Nothing else in the payload identifies the account, so an event without it cannot
-        // be attributed to a tenant and must not be handed to a handler as though it could.
+        // Nothing else in the payload identifies the number, so the message cannot be
+        // attributed to a tenant and must not be handed to a handler as though it could. It
+        // must not vanish either: an incoming message disappearing is not something an
+        // application can find out about any other way.
         var events = WhatsAppWebhookParser.Parse("""
             {"object":"whatsapp_business_account","entry":[{"id":"W","changes":[{"field":"messages",
              "value":{"messaging_product":"whatsapp",
@@ -356,7 +363,10 @@ public class WebhookParserTests
                            "text":{"body":"hi"}}]}}]}]}
             """);
 
-        Assert.Empty(events);
+        var unknown = Assert.IsType<UnknownEvent>(Assert.Single(events));
+
+        Assert.Equal("messages", unknown.Field);
+        Assert.Contains("wamid.A", unknown.Json, StringComparison.Ordinal);
     }
 
     [Theory]

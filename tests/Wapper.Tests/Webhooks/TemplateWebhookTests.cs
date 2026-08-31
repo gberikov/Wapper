@@ -112,6 +112,60 @@ public class TemplateWebhookTests
     }
 
     [Fact]
+    public void A_rejection_carries_the_reviewer_s_own_words()
+    {
+        // `reason` alone is INVALID_FORMAT, which tells an operator nothing about what to
+        // change. Meta puts that in `rejection_info`, not in the `other_info` the library
+        // used to read.
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            "message_template_status_update",
+            """
+            {
+              "event": "REJECTED",
+              "message_template_id": 1387372356726668,
+              "message_template_name": "abandoned_cart",
+              "message_template_language": "en_US",
+              "reason": "INVALID_FORMAT",
+              "rejection_info": {
+                "reason": "Your template has parameters placed next to each other.",
+                "recommendation": "Separate parameters with descriptive text."
+              }
+            }
+            """));
+
+        var change = Assert.IsType<TemplateStatusChanged>(Assert.Single(events));
+
+        Assert.Equal(TemplateStatus.Rejected, change.Status);
+        Assert.Equal(TemplateStatusChangeReason.InvalidFormat, change.Reason);
+        Assert.Equal("Your template has parameters placed next to each other.", change.Details);
+        Assert.Equal("Separate parameters with descriptive text.", change.Recommendation);
+    }
+
+    [Fact]
+    public void Other_info_still_wins_where_meta_sends_it()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            "message_template_status_update",
+            """
+            {
+              "event": "REJECTED",
+              "message_template_id": 1,
+              "message_template_name": "n",
+              "message_template_language": "en",
+              "reason": "ABUSIVE_CONTENT",
+              "other_info": {"title": "Component", "description": "The body asks for a PIN."},
+              "rejection_info": {"reason": "ignored", "recommendation": "Remove the request."}
+            }
+            """));
+
+        var change = Assert.IsType<TemplateStatusChanged>(Assert.Single(events));
+
+        Assert.Equal("The body asks for a PIN.", change.Details);
+        // The recommendation comes along either way; it has nowhere else to go.
+        Assert.Equal("Remove the request.", change.Recommendation);
+    }
+
+    [Fact]
     public void A_quality_drop_is_parsed()
     {
         var events = WhatsAppWebhookParser.Parse(Delivery(
