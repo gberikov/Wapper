@@ -1,5 +1,6 @@
 using Wapper.Media;
 using Wapper.Messages;
+using Wapper.Templates;
 
 namespace Wapper;
 
@@ -14,6 +15,9 @@ public interface IWhatsAppTenantClient
 
     /// <summary>Uploading, locating, downloading and deleting media.</summary>
     IMediaApi Media { get; }
+
+    /// <summary>Creating, reading, editing and deleting message templates.</summary>
+    ITemplatesApi Templates { get; }
 }
 
 /// <summary>

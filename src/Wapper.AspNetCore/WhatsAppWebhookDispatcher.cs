@@ -53,6 +53,12 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
             case WebhookError error:
                 await InvokeAsync(services, error, cancellationToken).ConfigureAwait(false);
                 break;
+            case TemplateStatusChanged template:
+                await InvokeAsync(services, template, cancellationToken).ConfigureAwait(false);
+                break;
+            case TemplateQualityChanged quality:
+                await InvokeAsync(services, quality, cancellationToken).ConfigureAwait(false);
+                break;
             default:
                 logger.LogWarning(
                     "No dispatch is registered for webhook event type {EventType}.",

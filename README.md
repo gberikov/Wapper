@@ -128,6 +128,48 @@ steering by the `X-App-Usage` and `X-Business-Use-Case-Usage` response headers.
 Backoff follows `4^X` seconds, the formula Meta publishes. The Cloud API does not
 send a `Retry-After` header, so nothing here depends on one.
 
+## Managing templates
+
+A template is the only message allowed outside the 24-hour customer service window, and it
+has to be approved before it can be sent.
+
+```csharp
+var created = await whatsApp.Templates.CreateAsync(new Template
+{
+    Name = "order_confirmation",
+    Language = "en_US",
+    Category = TemplateCategory.Utility,
+    ParameterFormat = TemplateParameterFormat.Named,
+    Body = new TemplateBody
+    {
+        Text = "Thank you, {{first_name}}! Your order number is {{order_number}}.",
+        Examples =
+        [
+            new TemplateParameterExample("Pablo", "first_name"),
+            new TemplateParameterExample("860198-230332", "order_number"),
+        ],
+    },
+    Buttons = [TemplateButton.Link("Track order", "https://example.com/orders/{{1}}", "1234")],
+}, cancellationToken: ct);
+```
+
+`created.Status` is `Pending`: review takes up to a day. The outcome arrives on the webhook,
+so handle it rather than polling.
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<TemplateWatcher, TemplateStatusChanged>();
+```
+
+Prefer named parameters over numbered ones. Numbered placeholders are matched by position, so
+inserting one renumbers everything after it — in the template *and* in every call site that
+sends it.
+
+Managing templates needs `WhatsAppBusinessAccountId` in configuration; sending messages does
+not. These calls spend the account's management allowance (200 an hour, 5000 once a number is
+registered), which the client paces separately from message throughput.
+
+Not covered yet: archiving and unarchiving.
+
 ## Running in more than one instance
 
 Meta counts per phone number on its side. Three replicas each pacing themselves against the

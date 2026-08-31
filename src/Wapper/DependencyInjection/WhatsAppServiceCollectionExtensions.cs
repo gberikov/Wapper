@@ -97,6 +97,7 @@ public static class WhatsAppServiceCollectionExtensions
         // should not have to know the facade exists.
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Messages);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Media);
+        services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Templates);
 
         return services
             .AddHttpClient<GraphApiClient>(HttpClientName)

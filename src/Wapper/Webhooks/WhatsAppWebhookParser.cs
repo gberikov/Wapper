@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Wapper.Internal;
 using Wapper.Messages;
+using Wapper.Templates;
 
 namespace Wapper.Webhooks;
 
@@ -45,7 +46,7 @@ public static class WhatsAppWebhookParser
             {
                 if (change.Value is { } value)
                 {
-                    Collect(value, events);
+                    Collect(change.Field, value, entry.Id ?? string.Empty, events);
                 }
             }
         }
@@ -57,10 +58,30 @@ public static class WhatsAppWebhookParser
     public static IReadOnlyList<WhatsAppEvent> Parse(string json) =>
         Parse(System.Text.Encoding.UTF8.GetBytes(json));
 
-    private static void Collect(WebhookValue value, List<WhatsAppEvent> events)
+    private static void Collect(
+        string? field,
+        WebhookValue value,
+        string businessAccountId,
+        List<WhatsAppEvent> events)
     {
-        // Everything in the payload identifies the account by phone number id, and nothing
-        // else does. Without it there is no way to say which tenant an event belongs to.
+        // Template events belong to the account rather than to a number and carry no
+        // metadata at all, so they are read before a phone number is insisted on.
+        switch (field)
+        {
+            case "message_template_status_update":
+                events.Add(ToStatusChange(value, businessAccountId));
+                return;
+
+            case "message_template_quality_update":
+                events.Add(ToQualityChange(value, businessAccountId));
+                return;
+
+            default:
+                break;
+        }
+
+        // For everything else the phone number is the only identifier the payload carries,
+        // and without it there is no saying which number an event belongs to.
         var phoneNumberId = value.Metadata?.PhoneNumberId;
         if (string.IsNullOrEmpty(phoneNumberId))
         {
@@ -71,7 +92,7 @@ public static class WhatsAppWebhookParser
 
         foreach (var message in value.Messages ?? [])
         {
-            if (ToEvent(message, value, phoneNumberId, display) is { } converted)
+            if (ToEvent(message, value, phoneNumberId, display, businessAccountId) is { } converted)
             {
                 events.Add(converted);
             }
@@ -79,7 +100,7 @@ public static class WhatsAppWebhookParser
 
         foreach (var status in value.Statuses ?? [])
         {
-            if (ToEvent(status, phoneNumberId, display) is { } converted)
+            if (ToEvent(status, phoneNumberId, display, businessAccountId) is { } converted)
             {
                 events.Add(converted);
             }
@@ -90,17 +111,60 @@ public static class WhatsAppWebhookParser
             events.Add(new WebhookError
             {
                 PhoneNumberId = phoneNumberId,
+                BusinessAccountId = businessAccountId,
                 DisplayPhoneNumber = display,
                 Error = error.ToError(),
             });
         }
     }
 
+    private static TemplateStatusChanged ToStatusChange(WebhookValue value, string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+        TemplateName = value.MessageTemplateName ?? string.Empty,
+        TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
+        Status = TemplateMapping.ParseStatus(value.Event),
+        RawEvent = value.Event,
+        Reason = ParseReason(value.Reason),
+        RawReason = value.Reason,
+        Details = value.OtherInfo?.Description ?? value.OtherInfo?.Title,
+    };
+
+    private static TemplateQualityChanged ToQualityChange(WebhookValue value, string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+        TemplateName = value.MessageTemplateName ?? string.Empty,
+        TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
+        Previous = ParseQuality(value.PreviousQualityScore),
+        Current = ParseQuality(value.NewQualityScore),
+    };
+
+    private static TemplateStatusChangeReason ParseReason(string? reason) => reason?.ToUpperInvariant() switch
+    {
+        "NONE" => TemplateStatusChangeReason.None,
+        "ABUSIVE_CONTENT" => TemplateStatusChangeReason.AbusiveContent,
+        "INVALID_FORMAT" => TemplateStatusChangeReason.InvalidFormat,
+        "SCAM" or "LOW_QUALITY" => TemplateStatusChangeReason.ScamOrLowQuality,
+        _ => TemplateStatusChangeReason.Unknown,
+    };
+
+    private static TemplateQuality ParseQuality(string? score) => score?.ToUpperInvariant() switch
+    {
+        "GREEN" or "HIGH" => TemplateQuality.Green,
+        "YELLOW" or "MEDIUM" => TemplateQuality.Yellow,
+        "RED" or "LOW" => TemplateQuality.Red,
+        "UNKNOWN" or "PENDING" => TemplateQuality.Pending,
+        _ => TemplateQuality.Unknown,
+    };
+
     private static WhatsAppEvent? ToEvent(
         WebhookMessage message,
         WebhookValue value,
         string phoneNumberId,
-        string? display)
+        string? display,
+        string businessAccountId)
     {
         if (message.Id is null || message.From is null)
         {
@@ -109,6 +173,7 @@ public static class WhatsAppWebhookParser
 
         var common = new MessageFields(
             phoneNumberId,
+            businessAccountId,
             display,
             ToTimestamp(message.Timestamp),
             message.Id,
@@ -167,6 +232,7 @@ public static class WhatsAppWebhookParser
             ? new UnsupportedMessage
             {
                 PhoneNumberId = common.PhoneNumberId,
+                BusinessAccountId = common.BusinessAccountId,
                 DisplayPhoneNumber = common.Display,
                 Timestamp = common.Timestamp,
                 Id = common.Id,
@@ -211,7 +277,11 @@ public static class WhatsAppWebhookParser
         };
     }
 
-    private static WhatsAppEvent? ToEvent(WebhookStatus status, string phoneNumberId, string? display)
+    private static WhatsAppEvent? ToEvent(
+        WebhookStatus status,
+        string phoneNumberId,
+        string? display,
+        string businessAccountId)
     {
         if (status.Id is null || status.RecipientId is null)
         {
@@ -221,6 +291,7 @@ public static class WhatsAppWebhookParser
         return new MessageStatusChanged
         {
             PhoneNumberId = phoneNumberId,
+            BusinessAccountId = businessAccountId,
             DisplayPhoneNumber = display,
             Timestamp = ToTimestamp(status.Timestamp),
             MessageId = status.Id,
@@ -249,6 +320,7 @@ public static class WhatsAppWebhookParser
         new()
         {
             PhoneNumberId = common.PhoneNumberId,
+            BusinessAccountId = common.BusinessAccountId,
             DisplayPhoneNumber = common.Display,
             Timestamp = common.Timestamp,
             Id = common.Id,
@@ -264,6 +336,7 @@ public static class WhatsAppWebhookParser
         new()
         {
             PhoneNumberId = common.PhoneNumberId,
+            BusinessAccountId = common.BusinessAccountId,
             DisplayPhoneNumber = common.Display,
             Timestamp = common.Timestamp,
             Id = common.Id,
@@ -279,6 +352,7 @@ public static class WhatsAppWebhookParser
         new()
         {
             PhoneNumberId = common.PhoneNumberId,
+            BusinessAccountId = common.BusinessAccountId,
             DisplayPhoneNumber = common.Display,
             Timestamp = common.Timestamp,
             Id = common.Id,
@@ -348,6 +422,7 @@ public static class WhatsAppWebhookParser
 
     private readonly record struct MessageFields(
         string PhoneNumberId,
+        string BusinessAccountId,
         string? Display,
         DateTimeOffset Timestamp,
         string Id,
