@@ -17,6 +17,59 @@ have to think about Meta's rate limits.
 | `Wapper.AspNetCore` | A mapped webhook endpoint with signature verification and typed event dispatch. |
 | `Wapper.RateLimiting.Redis` | Shared limiter state, for when the application runs in more than one instance. |
 
+## Getting started
+
+```csharp
+builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+```
+
+```jsonc
+{
+  "WhatsApp": {
+    "AccessToken": "...",
+    "PhoneNumberId": "106540352242922"
+  }
+}
+```
+
+```csharp
+public sealed class Orders(IWhatsAppClient whatsApp)
+{
+    public async Task ConfirmAsync(string customer, string orderId, CancellationToken ct)
+    {
+        await whatsApp.Messages.SendButtonsAsync(customer, new ButtonMessage
+        {
+            Body = $"Order {orderId} is ready. Shall we send it?",
+            Buttons =
+            [
+                new ReplyButton { Id = $"ship:{orderId}", Title = "Send it" },
+                new ReplyButton { Id = $"hold:{orderId}", Title = "Not yet" },
+            ],
+        }, cancellationToken: ct);
+    }
+}
+```
+
+Sending waits for a rate limit permit and retries what Meta says is worth retrying, so
+`SendButtonsAsync` either returns a `SentMessage` or tells you why it could not.
+
+### More than one phone number
+
+Register each one by name and ask for it by name:
+
+```csharp
+builder.Services.AddWhatsApp("acme", o => { o.AccessToken = "..."; o.PhoneNumberId = "..."; });
+
+await whatsApp.For("acme").Messages.SendTextAsync(customer, "hello", cancellationToken: ct);
+```
+
+When the tokens live in a database rather than in configuration — the usual case for a
+SaaS — replace the credential lookup instead:
+
+```csharp
+builder.Services.AddSingleton<IWhatsAppCredentialsProvider, MyTenantCredentials>();
+```
+
 ## Why the rate limiting matters
 
 The Cloud API enforces four independent budgets, each with its own key and its

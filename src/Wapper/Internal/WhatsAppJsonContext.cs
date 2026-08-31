@@ -12,6 +12,8 @@ namespace Wapper.Internal;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(GraphErrorEnvelope))]
 [JsonSerializable(typeof(AppUsage))]
+[JsonSerializable(typeof(SendMessagePayload))]
+[JsonSerializable(typeof(SendMessageResponse))]
 [JsonSerializable(typeof(MediaIdResponse))]
 [JsonSerializable(typeof(MediaInfoResponse))]
 [JsonSerializable(typeof(SuccessResponse))]

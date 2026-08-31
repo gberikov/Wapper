@@ -1,4 +1,5 @@
 using Wapper.Media;
+using Wapper.Messages;
 
 namespace Wapper;
 
@@ -7,6 +8,9 @@ public interface IWhatsAppTenantClient
 {
     /// <summary>Which tenant this client acts as.</summary>
     string Tenant { get; }
+
+    /// <summary>Sending messages, and acknowledging the ones that arrive.</summary>
+    IMessagesApi Messages { get; }
 
     /// <summary>Uploading, locating, downloading and deleting media.</summary>
     IMediaApi Media { get; }

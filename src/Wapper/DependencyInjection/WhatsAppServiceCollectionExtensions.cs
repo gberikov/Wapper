@@ -95,6 +95,7 @@ public static class WhatsAppServiceCollectionExtensions
 
         // Resolvable on their own, for code that only ever touches one resource group and
         // should not have to know the facade exists.
+        services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Messages);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Media);
 
         return services
