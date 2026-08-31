@@ -32,6 +32,22 @@ public sealed class RedisRateLimiterTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_pair_key_does_not_spell_out_the_customer_s_number()
+    {
+        // Redis persists to disk, and nothing ever reads the key back: the limiter only needs
+        // it to be the same on every instance. The business's own ids stay readable.
+        var pair = RedisRateLimiter.KeyFor("wapper:rl:", RateLimitScope.RecipientPair("111", "79001234567"));
+        var number = RedisRateLimiter.KeyFor("wapper:rl:", RateLimitScope.PhoneNumberThroughput("111"));
+
+        Assert.DoesNotContain("79001234567", pair.ToString(), StringComparison.Ordinal);
+        Assert.StartsWith("wapper:rl:RecipientPair:", pair.ToString(), StringComparison.Ordinal);
+        Assert.Equal(pair, RedisRateLimiter.KeyFor("wapper:rl:", RateLimitScope.RecipientPair("111", "79001234567")));
+        Assert.NotEqual(pair, RedisRateLimiter.KeyFor("wapper:rl:", RateLimitScope.RecipientPair("111", "79001234568")));
+
+        Assert.Equal("wapper:rl:PhoneNumberThroughput:111", number.ToString());
+    }
+
+    [Fact]
     public async Task A_call_within_the_budget_does_not_wait()
     {
         var limiter = CreateLimiter();

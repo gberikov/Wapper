@@ -290,7 +290,9 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
     };
 
     private static string Target(string? phoneNumberId, WhatsAppCredentials credentials) =>
-        string.IsNullOrWhiteSpace(phoneNumberId) ? credentials.PhoneNumberId : phoneNumberId;
+        string.IsNullOrWhiteSpace(phoneNumberId)
+            ? credentials.PhoneNumberId
+            : GraphApiClient.PathSegment(phoneNumberId);
 
     private static void GuardPin(string pin)
     {

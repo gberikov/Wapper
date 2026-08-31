@@ -1,7 +1,10 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Wapper.RateLimiting;
 
@@ -12,13 +15,20 @@ namespace Wapper.Internal;
 /// spends, sends it, retries what Meta says is worth retrying, and turns a final failure
 /// into a typed exception carrying the parsed error object.
 /// </summary>
-internal sealed class GraphApiClient(
+/// <remarks>
+/// The logger is optional so the client can be built by hand — in a test, or outside a host
+/// — without wiring up logging. Under a host it is always supplied.
+/// </remarks>
+internal sealed partial class GraphApiClient(
     HttpClient httpClient,
     IWhatsAppCredentialsProvider credentialsProvider,
     IWhatsAppRateLimiter rateLimiter,
     IOptionsMonitor<WhatsAppOptions> options,
-    TimeProvider time)
+    TimeProvider time,
+    ILogger<GraphApiClient>? logger = null)
 {
+    private readonly ILogger _logger = logger ?? NullLogger<GraphApiClient>.Instance;
+
     /// <summary>Resolves the credentials of a tenant.</summary>
     public ValueTask<WhatsAppCredentials> ResolveCredentialsAsync(
         string tenant,
@@ -73,8 +83,11 @@ internal sealed class GraphApiClient(
                     // find out the same way.
                     if (budget is { } spentOnce)
                     {
+                        var scope = ScopeFor(request, budgets, spentOnce);
+                        Log.HoldingBudgetBack(_logger, scope.Budget, scope.RedactedKey, backoff.TotalSeconds, exception.Code);
+
                         await rateLimiter
-                            .PenaliseAsync(ScopeFor(request, budgets, spentOnce), backoff, cancellationToken)
+                            .PenaliseAsync(scope, backoff, cancellationToken)
                             .ConfigureAwait(false);
                     }
 
@@ -86,14 +99,19 @@ internal sealed class GraphApiClient(
                         : exception;
                 }
 
+                Log.Retrying(_logger, request.Method, request.Path, exception.Code, attempt + 1, backoff.TotalSeconds);
+
                 if (budget is { } spent)
                 {
                     // Holding the budget back is also the wait: the next pass through
                     // WaitAsync will not come back until the penalty has run out, and every
                     // other call sharing that budget is held with it. Meta counts rejected
                     // calls too, so carrying on regardless would extend the block.
+                    var scope = ScopeFor(request, budgets, spent);
+                    Log.HoldingBudgetBack(_logger, scope.Budget, scope.RedactedKey, backoff.TotalSeconds, exception.Code);
+
                     await rateLimiter
-                        .PenaliseAsync(ScopeFor(request, budgets, spent), backoff, cancellationToken)
+                        .PenaliseAsync(scope, backoff, cancellationToken)
                         .ConfigureAwait(false);
 
                     // MaxWait is what a caller will wait for somebody else's traffic. This
@@ -195,6 +213,33 @@ internal sealed class GraphApiClient(
             "Uploading a file to Meta is addressed to your app rather than to a WhatsApp " +
             "object, and the app id is not configured. Set WhatsApp:AppId, or return it from " +
             $"your {nameof(IWhatsAppCredentialsProvider)}.");
+
+    /// <summary>
+    /// An identifier a caller handed in, made safe to put in a request path.
+    /// </summary>
+    /// <remarks>
+    /// Graph ids are digits, so a legitimate one comes out unchanged. Anything else is refused
+    /// before it reaches the wire: a media id of <c>../123/message_templates?name=x</c>, say,
+    /// would otherwise turn a media delete into a template delete — under the caller's token,
+    /// against a resource the caller never named. Escaping alone is not enough, because
+    /// <see cref="Uri"/> folds a bare <c>..</c> whether it is escaped or not.
+    /// </remarks>
+    internal static string PathSegment(
+        string id,
+        [CallerArgumentExpression(nameof(id))] string? paramName = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id, paramName);
+
+        if (id is "." or ".." || id.AsSpan().IndexOfAny("/\\?#") >= 0)
+        {
+            throw new ArgumentException(
+                $"'{id}' is not something this client will put in a request path. A Graph " +
+                "identifier carries no slashes, dots or query characters.",
+                paramName);
+        }
+
+        return Uri.EscapeDataString(id);
+    }
 
     internal static Uri BuildUri(WhatsAppOptions options, string path)
     {
@@ -487,21 +532,21 @@ internal sealed class GraphApiClient(
         var appUsage = GraphUsageHeaders.ReadAppUsage(response);
         if (appUsage.IsOverThreshold(limits.UsagePercentThreshold))
         {
-            await rateLimiter.PenaliseAsync(
-                    ApplicationScope(request),
-                    PenaltyFor(appUsage),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var scope = ApplicationScope(request);
+            var penalty = PenaltyFor(appUsage);
+            Log.UsageNearLimit(_logger, GraphUsageHeaders.AppUsageHeader, appUsage.HighestPercent, scope.Budget, penalty.TotalSeconds);
+
+            await rateLimiter.PenaliseAsync(scope, penalty, cancellationToken).ConfigureAwait(false);
         }
 
         var businessUsage = GraphUsageHeaders.ReadBusinessUseCaseUsage(response);
         if (businessUsage.IsOverThreshold(limits.UsagePercentThreshold))
         {
-            await rateLimiter.PenaliseAsync(
-                    BusinessAccountScope(request),
-                    PenaltyFor(businessUsage),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var scope = BusinessAccountScope(request);
+            var penalty = PenaltyFor(businessUsage);
+            Log.UsageNearLimit(_logger, GraphUsageHeaders.BusinessUseCaseUsageHeader, businessUsage.HighestPercent, scope.Budget, penalty.TotalSeconds);
+
+            await rateLimiter.PenaliseAsync(scope, penalty, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -522,7 +567,7 @@ internal sealed class GraphApiClient(
     /// The Cloud API does not document this header and normally does not send it, so this is
     /// read opportunistically and never depended on: something in front of Meta may add one.
     /// </remarks>
-    private static TimeSpan? RetryAfterOf(HttpResponseMessage response)
+    private TimeSpan? RetryAfterOf(HttpResponseMessage response)
     {
         if (response.Headers.RetryAfter is not { } retryAfter)
         {
@@ -536,7 +581,7 @@ internal sealed class GraphApiClient(
 
         if (retryAfter.Date is { } date)
         {
-            var wait = date - DateTimeOffset.UtcNow;
+            var wait = date - time.GetUtcNow();
             return wait > TimeSpan.Zero ? wait : null;
         }
 
@@ -579,5 +624,46 @@ internal sealed class GraphApiClient(
                       $"{response.ReasonPhrase ?? response.StatusCode.ToString()} without a " +
                       "readable error object.",
         };
+    }
+
+    /// <summary>
+    /// What the client says about pacing itself. Nothing here carries a customer's number in
+    /// full: a pair scope is logged through its redacted key.
+    /// </summary>
+    private static partial class Log
+    {
+        [LoggerMessage(
+            EventId = 1,
+            Level = LogLevel.Information,
+            Message = "The Cloud API rejected {Method} {Path} with error {Code}; retry {Attempt} in {DelaySeconds}s.")]
+        public static partial void Retrying(
+            ILogger logger,
+            HttpMethod method,
+            string path,
+            int code,
+            int attempt,
+            double delaySeconds);
+
+        [LoggerMessage(
+            EventId = 2,
+            Level = LogLevel.Warning,
+            Message = "Holding the {Budget} budget for '{Scope}' back for {HoldSeconds}s after error {Code}.")]
+        public static partial void HoldingBudgetBack(
+            ILogger logger,
+            RateLimitBudget budget,
+            string scope,
+            double holdSeconds,
+            int code);
+
+        [LoggerMessage(
+            EventId = 3,
+            Level = LogLevel.Warning,
+            Message = "{Header} reports {Percent}% of the allowance spent; holding the {Budget} budget back for {HoldSeconds}s.")]
+        public static partial void UsageNearLimit(
+            ILogger logger,
+            string header,
+            int percent,
+            RateLimitBudget budget,
+            double holdSeconds);
     }
 }

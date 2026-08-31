@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Wapper.Internal;
 using Wapper.RateLimiting;
@@ -328,10 +329,36 @@ public class RetryTests
         WhatsAppJsonContext.Default.GraphErrorEnvelope,
         TestContext.Current.CancellationToken);
 
+    [Fact]
+    public async Task A_retry_and_the_hold_it_imposes_are_logged_without_the_customer_s_number()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.BadRequest, Rejection(WhatsAppErrorCodes.PairRateLimitReached)),
+            (HttpStatusCode.OK, Ok));
+        var time = new FakeTimeProvider();
+        var logger = new RecordingLogger<GraphApiClient>();
+        var client = CreateClient(handler, time, logger: logger);
+
+        await Clock.RunAsync(time, SendAsync(client));
+
+        // A caller watching a send take sixty seconds deserves to be told why, and the log
+        // is the only place it can be told.
+        var retry = Assert.Single(logger.Lines, line => line.Event.Id == 1);
+        Assert.Equal(LogLevel.Information, retry.Level);
+        Assert.Contains("131056", retry.Message, StringComparison.Ordinal);
+
+        var hold = Assert.Single(logger.Lines, line => line.Event.Id == 2);
+        Assert.Equal(LogLevel.Warning, hold.Level);
+        Assert.Contains("RecipientPair", hold.Message, StringComparison.Ordinal);
+        // The pair scope is keyed by the customer's number, which is not something to log.
+        Assert.DoesNotContain("79000000001", hold.Message, StringComparison.Ordinal);
+    }
+
     private static GraphApiClient CreateClient(
         StubHttpMessageHandler handler,
         FakeTimeProvider time,
-        Action<WhatsAppOptions>? configure = null)
+        Action<WhatsAppOptions>? configure = null,
+        RecordingLogger<GraphApiClient>? logger = null)
     {
         var options = new WhatsAppOptions();
         configure?.Invoke(options);
@@ -341,6 +368,7 @@ public class RetryTests
             new StubCredentialsProvider(Credentials),
             new InMemoryRateLimiter(time),
             new StaticOptionsMonitor<WhatsAppOptions>(options),
-            time);
+            time,
+            logger);
     }
 }

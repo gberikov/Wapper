@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
@@ -296,8 +298,31 @@ internal sealed class RedisRateLimiter(
         return fallback.WaitAsync(requests, maxWait, cancellationToken);
     }
 
-    private RedisKey KeyFor(RateLimitScope scope) =>
-        $"{_options.KeyPrefix}{Name(scope.Budget)}:{scope.Key}";
+    private RedisKey KeyFor(RateLimitScope scope) => KeyFor(_options.KeyPrefix, scope);
+
+    /// <summary>
+    /// The key a scope lives under.
+    /// </summary>
+    /// <remarks>
+    /// A pair scope is keyed by the customer's phone number, and Redis persists to disk. The
+    /// number has no business sitting there in the clear when nothing ever reads the key back
+    /// — the limiter only needs it to be the same on every instance — so a pair is keyed by a
+    /// digest of it instead. The other scopes name the business's own ids, which are worth
+    /// being able to read in <c>redis-cli</c>.
+    /// </remarks>
+    internal static RedisKey KeyFor(string prefix, RateLimitScope scope)
+    {
+        if (scope.Budget != RateLimitBudget.RecipientPair)
+        {
+            return $"{prefix}{Name(scope.Budget)}:{scope.Key}";
+        }
+
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(Encoding.UTF8.GetBytes(scope.Key), digest);
+
+        // Half the digest is 128 bits: plenty to keep pairs apart, and half the key length.
+        return $"{prefix}{Name(scope.Budget)}:{Convert.ToHexString(digest[..16])}";
+    }
 
     /// <remarks>
     /// Written out rather than left to <c>ToString</c>, which reflects over the enum and
