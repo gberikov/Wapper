@@ -138,9 +138,24 @@ public class FlowsApiTests
         // Only id, name, status, categories and validation_errors come back on their own.
         Assert.Contains("endpoint_uri", query, StringComparison.Ordinal);
         Assert.Contains("health_status", query, StringComparison.Ordinal);
+        // The preview is not one of them. Its link needs no login and lasts thirty days, so
+        // it is not something to pull into a read that never asked for it.
+        Assert.DoesNotContain("preview", query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_preview_link_is_only_fetched_when_it_is_asked_for()
+    {
+        var (flows, handler) = Create("""{"id":"1","status":"DRAFT"}""");
+
+        await flows.GetAsync("1", includePreview: true, cancellationToken: TestContext.Current.CancellationToken);
+
         // invalidate(false) returns the link that exists rather than minting a new one and
         // breaking whatever was already shared.
-        Assert.Contains("preview.invalidate(false)", query, StringComparison.Ordinal);
+        Assert.Contains(
+            "preview.invalidate(false)",
+            Assert.Single(handler.Requests).RequestUri!.Query,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -148,7 +163,7 @@ public class FlowsApiTests
     {
         var (flows, handler) = Create("""{"id":"1"}""");
 
-        await flows.GetAsync("1", "106540352242922", TestContext.Current.CancellationToken);
+        await flows.GetAsync("1", "106540352242922", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(
             "health_status.phone_number(106540352242922)",
@@ -283,7 +298,7 @@ public class FlowsApiTests
     }
 
     [Fact]
-    public async Task An_upload_is_never_retried()
+    public async Task An_upload_from_a_stream_that_cannot_be_rewound_is_not_retried()
     {
         var handler = StubHttpMessageHandler.Sequence(
             (HttpStatusCode.InternalServerError,
@@ -293,11 +308,46 @@ public class FlowsApiTests
         await Assert.ThrowsAsync<WhatsAppApiException>(() =>
             CreateWith(handler, Credentials).UpdateJsonAsync(
                 "1122334455",
-                new MemoryStream(Encoding.UTF8.GetBytes("{}")),
+                new ForwardOnlyStream("{}"u8.ToArray()),
                 TestContext.Current.CancellationToken));
 
-        // The stream has already been read; a second attempt would upload nothing.
+        // The document has already gone to the wire, and a second attempt would store an
+        // empty Flow JSON over the one that is there.
         Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_retried_upload_sends_the_document_again_rather_than_an_empty_one()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.InternalServerError,
+             """{"error":{"code":131000,"message":"Something went wrong","is_transient":true}}"""),
+            (HttpStatusCode.OK, Ok));
+        var time = new FakeTimeProvider();
+        var flows = CreateWith(handler, Credentials, time);
+
+        await Clock.RunAsync(time, flows.UpdateJsonAsync(
+            "1122334455",
+            new MemoryStream(Encoding.UTF8.GetBytes("""{"version":"7.0"}""")),
+            TestContext.Current.CancellationToken));
+
+        // A seekable stream can be wound back, so the transient failure is worth another go —
+        // and the second attempt has to carry the document, not the empty remains of the first.
+        Assert.Equal(2, handler.Bodies.Count);
+        Assert.All(handler.Bodies, body =>
+            Assert.Contains("""{"version":"7.0"}""", body!, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_upload_does_not_close_the_caller_s_stream()
+    {
+        var (flows, _) = Create(Ok);
+        using var json = new MemoryStream(Encoding.UTF8.GetBytes("{}"));
+
+        await flows.UpdateJsonAsync("1122334455", json, TestContext.Current.CancellationToken);
+
+        // The stream belongs to the caller, who may well be uploading it to a second Flow.
+        Assert.True(json.CanRead);
     }
 
     [Fact]
@@ -448,9 +498,10 @@ public class FlowsApiTests
 
     private static IFlowsApi CreateWith(
         StubHttpMessageHandler handler,
-        WhatsAppCredentials credentials)
+        WhatsAppCredentials credentials,
+        FakeTimeProvider? clock = null)
     {
-        var time = new FakeTimeProvider();
+        var time = clock ?? new FakeTimeProvider();
 
         return new FlowsApi(
             new GraphApiClient(

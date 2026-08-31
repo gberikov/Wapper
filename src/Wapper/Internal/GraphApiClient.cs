@@ -42,9 +42,13 @@ internal sealed class GraphApiClient(
 
         var budgets = BuildBudgets(request, limits);
 
+        // How long this call will sit in the limiter. It starts at the configured ceiling and
+        // grows to cover a backoff this call imposed on itself; see where it is raised below.
+        var maxWait = limits.MaxWait;
+
         for (var attempt = 0; ; attempt++)
         {
-            await rateLimiter.WaitAsync(budgets, limits.MaxWait, cancellationToken)
+            await rateLimiter.WaitAsync(budgets, maxWait, cancellationToken)
                 .ConfigureAwait(false);
 
             try
@@ -55,7 +59,7 @@ internal sealed class GraphApiClient(
             catch (WhatsAppApiException exception)
             {
                 var retryable = ThrottlePolicy.ShouldRetry(exception.Error, out var budget);
-                var backoff = ThrottlePolicy.Backoff(attempt);
+                var backoff = ThrottlePolicy.Backoff(attempt, exception.RetryAfter);
 
                 if (!retryable)
                 {
@@ -70,13 +74,13 @@ internal sealed class GraphApiClient(
                     if (budget is { } spentOnce)
                     {
                         await rateLimiter
-                            .PenaliseAsync(FindScope(budgets, spentOnce), backoff, cancellationToken)
+                            .PenaliseAsync(ScopeFor(request, budgets, spentOnce), backoff, cancellationToken)
                             .ConfigureAwait(false);
                     }
 
                     throw budget is { } exhausted
                         ? new WhatsAppRateLimitedException(
-                            FindScope(budgets, exhausted),
+                            ScopeFor(request, budgets, exhausted),
                             backoff,
                             exception)
                         : exception;
@@ -89,8 +93,16 @@ internal sealed class GraphApiClient(
                     // other call sharing that budget is held with it. Meta counts rejected
                     // calls too, so carrying on regardless would extend the block.
                     await rateLimiter
-                        .PenaliseAsync(FindScope(budgets, spent), backoff, cancellationToken)
+                        .PenaliseAsync(ScopeFor(request, budgets, spent), backoff, cancellationToken)
                         .ConfigureAwait(false);
+
+                    // MaxWait is what a caller will wait for somebody else's traffic. This
+                    // hold is our own backoff, and refusing to sit it out would turn the
+                    // retry into the failure: the caller would get a rate-limit exception
+                    // about a wait this very call asked for, with the Cloud API's own error
+                    // nowhere in it. Meta's 4^X reaches 64 seconds by the fourth retry, which
+                    // is longer than any sane MaxWait.
+                    maxWait = backoff > limits.MaxWait ? backoff : limits.MaxWait;
                 }
                 else
                 {
@@ -116,6 +128,11 @@ internal sealed class GraphApiClient(
     {
         var tenantOptions = options.Get(request.Tenant);
 
+        // The URL came back from the Cloud API, but it reaches this method through a public
+        // one that takes a MediaInfo the caller can build. Anything wrong or hostile in it
+        // would be handed a working access token.
+        GuardFetchUri(tenantOptions, absoluteUri);
+
         using var httpRequest = new HttpRequestMessage(HttpMethod.Get, absoluteUri);
         httpRequest.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", request.Credentials.AccessToken);
@@ -125,8 +142,12 @@ internal sealed class GraphApiClient(
             cancellationToken,
             timeout.Token);
 
-        var response = await httpClient
-            .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, linked.Token)
+        var response = await SendCoreAsync(
+                httpRequest,
+                request,
+                tenantOptions,
+                cancellationToken,
+                linked.Token)
             .ConfigureAwait(false);
 
         if (response.IsSuccessStatusCode)
@@ -138,7 +159,8 @@ internal sealed class GraphApiClient(
         {
             throw new WhatsAppApiException(
                 await ParseErrorAsync(response, linked.Token).ConfigureAwait(false),
-                response.StatusCode);
+                response.StatusCode,
+                RetryAfterOf(response));
         }
         finally
         {
@@ -185,6 +207,39 @@ internal sealed class GraphApiClient(
         return new Uri(root, $"{options.GraphApiVersion}/{path.TrimStart('/')}");
     }
 
+    /// <summary>
+    /// Refuses to present the access token to a host that is not Meta's.
+    /// </summary>
+    /// <remarks>
+    /// A media URL is not a Graph API address: Meta returns a host of its own choosing, and
+    /// the download only works with the bearer token attached. That makes the URL a place a
+    /// token can be sent, so where it points has to be checked rather than trusted — a stored
+    /// or replayed <c>MediaInfo</c> pointing somewhere else would otherwise collect a working
+    /// token for the whole account.
+    /// </remarks>
+    internal static void GuardFetchUri(WhatsAppOptions options, Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        if (!uri.IsAbsoluteUri || uri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new WhatsAppException(
+                $"A media download has to be an absolute https URL, and '{uri}' is not. The " +
+                "access token travels with the request, and anything else would put it on the " +
+                "wire in the clear.");
+        }
+
+        if (IsAllowedFetchHost(options, uri.Host))
+        {
+            return;
+        }
+
+        throw new WhatsAppException(
+            $"'{uri.Host}' is not a host this client will present the access token to. Media " +
+            "downloads come back on Meta's own hosts; if Meta has started using another one, " +
+            $"add it to {nameof(WhatsAppOptions)}.{nameof(WhatsAppOptions.MediaDownloadHosts)}.");
+    }
+
     /// <summary>Works out which budgets a call spends, and how large each one is.</summary>
     internal static IReadOnlyList<RateLimitRequest> BuildBudgets(
         GraphRequest request,
@@ -194,8 +249,8 @@ internal sealed class GraphApiClient(
         {
             // Always present, never paced: the platform allowance is 200 times the number of
             // daily active users, which Meta does not publish. It exists here so that a
-            // rejection can hold the whole tenant back.
-            RateLimitRequest.Unpaced(RateLimitScope.ApplicationRequests(request.Tenant)),
+            // rejection can hold the whole application back.
+            RateLimitRequest.Unpaced(ApplicationScope(request)),
         };
 
         switch (request.Kind)
@@ -220,9 +275,7 @@ internal sealed class GraphApiClient(
 
             case GraphCallKind.Management:
                 budgets.Add(new RateLimitRequest(
-                    RateLimitScope.BusinessAccountRequests(
-                        request.Credentials.WhatsAppBusinessAccountId
-                        ?? request.Credentials.PhoneNumberId),
+                    BusinessAccountScope(request),
                     limits.BusinessAccountRequestsPerHour / 3600d,
                     limits.BusinessAccountRequestsPerHour));
                 break;
@@ -235,7 +288,64 @@ internal sealed class GraphApiClient(
         return budgets;
     }
 
-    private static RateLimitScope FindScope(
+    /// <summary>
+    /// The platform-wide budget this call spends.
+    /// </summary>
+    /// <remarks>
+    /// Keyed by Meta app id, because that is what Meta counts. A host serving many tenants
+    /// through one app has to hold all of them back when the app is blocked: holding only the
+    /// tenant that discovered it would leave the rest hammering a block that gets longer the
+    /// more it is hammered. Falls back to the tenant name when no app id is configured, which
+    /// is the best a single-tenant application can do and costs it nothing.
+    /// </remarks>
+    private static RateLimitScope ApplicationScope(GraphRequest request) =>
+        RateLimitScope.ApplicationRequests(request.Credentials.AppId ?? request.Tenant);
+
+    /// <remarks>
+    /// Falls back to the phone number so a tenant that never configured the account id still
+    /// counts its management calls against something stable.
+    /// </remarks>
+    private static RateLimitScope BusinessAccountScope(GraphRequest request) =>
+        RateLimitScope.BusinessAccountRequests(
+            request.Credentials.WhatsAppBusinessAccountId ?? request.Credentials.PhoneNumberId);
+
+    private static bool IsAllowedFetchHost(WhatsAppOptions options, string host)
+    {
+        // Whatever the base address points at is by definition somewhere this client already
+        // sends the token, which is what makes a proxy or a test server work.
+        if (options.BaseAddress.IsAbsoluteUri
+            && string.Equals(host, options.BaseAddress.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var allowed in options.MediaDownloadHosts)
+        {
+            if (string.IsNullOrEmpty(allowed))
+            {
+                continue;
+            }
+
+            if (string.Equals(host, allowed, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // A suffix match, and only on a label boundary: "evilfbcdn.net" must not pass
+            // for "fbcdn.net".
+            if (host.Length > allowed.Length
+                && host[host.Length - allowed.Length - 1] == '.'
+                && host.EndsWith(allowed, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static RateLimitScope ScopeFor(
+        GraphRequest request,
         IReadOnlyList<RateLimitRequest> budgets,
         RateLimitBudget budget)
     {
@@ -248,9 +358,19 @@ internal sealed class GraphApiClient(
         }
 
         // The Cloud API named a budget this call was not pacing — a management limit hit by
-        // a call we classified as something else. Record it under its own name rather than
-        // pretending it was one of ours.
-        return new RateLimitScope(budget, "unknown");
+        // a call we classified as something else. Key it the way the call would have been
+        // keyed had it been classified that way, so the hold lands on the budget that is
+        // actually spent rather than on a scope nothing else will ever look up.
+        return budget switch
+        {
+            RateLimitBudget.ApplicationRequests => ApplicationScope(request),
+            RateLimitBudget.BusinessAccountRequests => BusinessAccountScope(request),
+            RateLimitBudget.PhoneNumberThroughput =>
+                RateLimitScope.PhoneNumberThroughput(request.Credentials.PhoneNumberId),
+            RateLimitBudget.RecipientPair when request.Recipient is { } recipient =>
+                RateLimitScope.RecipientPair(request.Credentials.PhoneNumberId, recipient),
+            _ => new RateLimitScope(budget, request.Credentials.PhoneNumberId),
+        };
     }
 
     private async Task<TResponse> SendOnceAsync<TResponse>(
@@ -275,18 +395,23 @@ internal sealed class GraphApiClient(
             cancellationToken,
             timeout.Token);
 
-        using var response = await httpClient
-            .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, linked.Token)
+        using var response = await SendCoreAsync(
+                httpRequest,
+                request,
+                tenantOptions,
+                cancellationToken,
+                linked.Token)
             .ConfigureAwait(false);
 
-        await ApplyUsageHeadersAsync(request, tenantOptions, response, cancellationToken)
+        await ApplyUsageHeadersAsync(request, tenantOptions, response, linked.Token)
             .ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
             throw new WhatsAppApiException(
                 await ParseErrorAsync(response, linked.Token).ConfigureAwait(false),
-                response.StatusCode);
+                response.StatusCode,
+                RetryAfterOf(response));
         }
 
         var result = await response.Content
@@ -296,6 +421,51 @@ internal sealed class GraphApiClient(
         return result ?? throw new WhatsAppException(
             $"The Cloud API returned an empty body for {request.Method} {request.Path}, which is " +
             "never valid for this endpoint.");
+    }
+
+    /// <summary>
+    /// Sends the request, and turns the two ways it can fail without ever reaching Meta into
+    /// something a caller can tell apart.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A per-tenant timeout is enforced with a token, so it surfaces as a cancellation that
+    /// looks exactly like the caller's own — except that the caller's token is not the one
+    /// that fired. Reporting it as a cancellation would have a request handler log a
+    /// disconnect for what is really an unreachable Cloud API.
+    /// </para>
+    /// <para>
+    /// Neither failure is retried. Nothing came back, so there is no saying whether the
+    /// message was accepted before the connection died, and Meta offers no idempotency key to
+    /// settle it — sending again could deliver the message twice.
+    /// </para>
+    /// </remarks>
+    private async Task<HttpResponseMessage> SendCoreAsync(
+        HttpRequestMessage httpRequest,
+        GraphRequest request,
+        WhatsAppOptions tenantOptions,
+        CancellationToken callerToken,
+        CancellationToken effectiveToken)
+    {
+        try
+        {
+            return await httpClient
+                .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, effectiveToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!callerToken.IsCancellationRequested)
+        {
+            throw new WhatsAppException(
+                $"{request.Method} {request.Path} did not complete within the configured timeout " +
+                $"of {tenantOptions.Timeout.TotalSeconds:0.##}s.",
+                exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new WhatsAppException(
+                $"{request.Method} {request.Path} could not be sent: {exception.Message}",
+                exception);
+        }
     }
 
     /// <summary>
@@ -318,7 +488,7 @@ internal sealed class GraphApiClient(
         if (appUsage.IsOverThreshold(limits.UsagePercentThreshold))
         {
             await rateLimiter.PenaliseAsync(
-                    RateLimitScope.ApplicationRequests(request.Tenant),
+                    ApplicationScope(request),
                     PenaltyFor(appUsage),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -328,9 +498,7 @@ internal sealed class GraphApiClient(
         if (businessUsage.IsOverThreshold(limits.UsagePercentThreshold))
         {
             await rateLimiter.PenaliseAsync(
-                    RateLimitScope.BusinessAccountRequests(
-                        request.Credentials.WhatsAppBusinessAccountId
-                        ?? request.Credentials.PhoneNumberId),
+                    BusinessAccountScope(request),
                     PenaltyFor(businessUsage),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -346,6 +514,34 @@ internal sealed class GraphApiClient(
         reading.TimeToRegainAccess > TimeSpan.Zero
             ? reading.TimeToRegainAccess
             : TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// The <c>Retry-After</c> of a response, when there is one.
+    /// </summary>
+    /// <remarks>
+    /// The Cloud API does not document this header and normally does not send it, so this is
+    /// read opportunistically and never depended on: something in front of Meta may add one.
+    /// </remarks>
+    private static TimeSpan? RetryAfterOf(HttpResponseMessage response)
+    {
+        if (response.Headers.RetryAfter is not { } retryAfter)
+        {
+            return null;
+        }
+
+        if (retryAfter.Delta is { } delta)
+        {
+            return delta > TimeSpan.Zero ? delta : null;
+        }
+
+        if (retryAfter.Date is { } date)
+        {
+            var wait = date - DateTimeOffset.UtcNow;
+            return wait > TimeSpan.Zero ? wait : null;
+        }
+
+        return null;
+    }
 
     private static async Task<WhatsAppError> ParseErrorAsync(
         HttpResponseMessage response,
@@ -363,16 +559,7 @@ internal sealed class GraphApiClient(
 
             if (envelope?.Error is { } error)
             {
-                return new WhatsAppError
-                {
-                    Code = error.Code,
-                    Type = error.Type,
-                    Message = error.Message,
-                    Details = error.ErrorData?.Details,
-                    TraceId = error.FbTraceId,
-                    IsTransient = error.IsTransient,
-                    Subcode = error.ErrorSubcode,
-                };
+                return error.ToError();
             }
         }
         catch (JsonException)

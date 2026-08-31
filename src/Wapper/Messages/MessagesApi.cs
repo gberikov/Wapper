@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using Wapper.Internal;
 using Wapper.Media;
 
@@ -279,7 +278,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/messages",
                     Kind = GraphCallKind.Message,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.SendMessagePayload),
                 },
@@ -334,7 +333,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     // Named so the pair allowance is counted per conversation. Without it the
                     // client would pace the phone number and walk straight into 131056.
                     Recipient = to,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.SendMessagePayload),
                 },

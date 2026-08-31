@@ -45,6 +45,26 @@ public sealed class WhatsAppOptions
     /// <summary>Root address of the Graph API.</summary>
     public Uri BaseAddress { get; set; } = new("https://graph.facebook.com/");
 
+    /// <summary>
+    /// The hosts a media download may present the access token to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A media URL is not a Graph API address: Meta hands back a host of its own choosing,
+    /// and the download only works with the bearer token attached. That makes the URL a place
+    /// a token can be sent, so it is checked against this list rather than trusted — matched
+    /// whole, or as a suffix on a label boundary, so <c>evilfbcdn.net</c> does not pass for
+    /// <c>fbcdn.net</c>. <see cref="BaseAddress"/>'s own host is always allowed.
+    /// </para>
+    /// <para>
+    /// The defaults are the hosts Meta serves media from today. Add to them if Meta starts
+    /// using another one; the entries configuration supplies are added to these rather than
+    /// replacing them.
+    /// </para>
+    /// </remarks>
+    public IList<string> MediaDownloadHosts { get; set; } =
+        ["lookaside.fbsbx.com", "whatsapp.net", "fbcdn.net", "facebook.com"];
+
     /// <summary>How long a single HTTP call may take. Defaults to 100 seconds.</summary>
     /// <remarks>This does not include time spent waiting for a rate limit token.</remarks>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(100);

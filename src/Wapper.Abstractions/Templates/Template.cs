@@ -1,3 +1,5 @@
+using Wapper.Webhooks;
+
 namespace Wapper.Templates;
 
 /// <summary>How a template is categorised. Meta prices and polices each category differently.</summary>
@@ -108,6 +110,66 @@ public enum TemplateButtonKind
 
     /// <summary>Places a WhatsApp call to the business.</summary>
     VoiceCall,
+
+    /// <summary>
+    /// Hands a one-time passcode to the customer. Only on an authentication template, and
+    /// only one per template.
+    /// </summary>
+    OneTimePassword,
+}
+
+/// <summary>How an authentication template's button delivers the passcode.</summary>
+public enum OneTimePasswordDelivery
+{
+    /// <summary>A delivery method this library does not know about yet.</summary>
+    Unknown,
+
+    /// <summary>
+    /// The customer copies the code and pastes it themselves. Works everywhere, and needs
+    /// nothing from your app.
+    /// </summary>
+    CopyCode,
+
+    /// <summary>
+    /// One tap fills the code into your Android app. Falls back to copy-code on iOS and on
+    /// handsets that cannot autofill.
+    /// </summary>
+    OneTap,
+
+    /// <summary>
+    /// The code reaches your Android app without the customer doing anything at all. Meta
+    /// requires its terms to have been accepted before a template using it is approved.
+    /// </summary>
+    ZeroTap,
+}
+
+/// <summary>An Android app a one-time passcode may be delivered into.</summary>
+/// <param name="PackageName">Its package name, for example <c>com.example.myapp</c>.</param>
+/// <param name="SignatureHash">
+/// The 11-character hash of the signing certificate. Meta matches on it so a passcode cannot
+/// be autofilled into an impostor app.
+/// </param>
+public readonly record struct TemplateApplication(string PackageName, string SignatureHash);
+
+/// <summary>What an authentication template's one-time-passcode button does.</summary>
+public sealed record TemplateOneTimePassword
+{
+    /// <summary>How the code reaches the customer.</summary>
+    public OneTimePasswordDelivery Delivery { get; init; }
+
+    /// <summary>The raw <c>otp_type</c>, for a delivery method not known here.</summary>
+    public string? RawDelivery { get; init; }
+
+    /// <summary>
+    /// The label shown while the code is being filled in. One-tap and zero-tap only.
+    /// </summary>
+    public string? AutofillText { get; init; }
+
+    /// <summary>The apps the code may be delivered into. One-tap and zero-tap only.</summary>
+    public IReadOnlyList<TemplateApplication> SupportedApps { get; init; } = [];
+
+    /// <summary>Whether Meta's zero-tap terms have been accepted. Required for zero-tap.</summary>
+    public bool? ZeroTapTermsAccepted { get; init; }
 }
 
 /// <summary>
@@ -124,7 +186,13 @@ public readonly record struct TemplateParameterExample(string Value, string? Nam
 /// <summary>The banner at the top of a template.</summary>
 public sealed record TemplateHeader
 {
-    private TemplateHeader(TemplateHeaderFormat format)
+    /// <remarks>
+    /// Internal rather than private so the mapping layer can build a header out of whatever
+    /// Meta actually sent. The public factories validate, which is right for a template being
+    /// written; a template being read has to survive a missing field rather than throw and
+    /// take the whole listing with it.
+    /// </remarks>
+    internal TemplateHeader(TemplateHeaderFormat format)
     {
         Format = format;
     }
@@ -183,16 +251,27 @@ public sealed record TemplateHeader
 public sealed record TemplateBody
 {
     /// <summary>The text, at most 1024 characters, holding any number of placeholders.</summary>
+    /// <remarks>
+    /// Empty on an authentication template: Meta writes the body itself, in every language it
+    /// supports, and rejects one that brings its own.
+    /// </remarks>
     public required string Text { get; init; }
 
     /// <summary>Sample values for the placeholders, one per placeholder.</summary>
     public IReadOnlyList<TemplateParameterExample> Examples { get; init; } = [];
+
+    /// <summary>
+    /// Whether Meta should append "For your security, do not share this code." to the body.
+    /// </summary>
+    /// <remarks>Authentication templates only.</remarks>
+    public bool? AddSecurityRecommendation { get; init; }
 }
 
 /// <summary>One of a template's buttons.</summary>
 public sealed record TemplateButton
 {
-    private TemplateButton(TemplateButtonKind kind)
+    /// <inheritdoc cref="TemplateHeader(TemplateHeaderFormat)" path="/remarks" />
+    internal TemplateButton(TemplateButtonKind kind)
     {
         Kind = kind;
     }
@@ -214,6 +293,9 @@ public sealed record TemplateButton
 
     /// <summary>Sample string a copy-code button puts on the clipboard. At most 20 characters.</summary>
     public string? CopyCodeExample { get; init; }
+
+    /// <summary>How the passcode is delivered, for a one-time-passcode button.</summary>
+    public TemplateOneTimePassword? OneTimePassword { get; init; }
 
     /// <summary>The raw type string, for a button kind this library does not know.</summary>
     public string? RawKind { get; init; }
@@ -276,6 +358,70 @@ public sealed record TemplateButton
     }
 
     /// <summary>
+    /// A button that copies a one-time passcode to the clipboard, for an authentication
+    /// template.
+    /// </summary>
+    /// <param name="text">
+    /// The label. Meta supplies a translated default when it is left unset, which is usually
+    /// better than translating it yourself.
+    /// </param>
+    public static TemplateButton CopyOneTimePassword(string? text = null) =>
+        new(TemplateButtonKind.OneTimePassword)
+        {
+            Text = text,
+            OneTimePassword = new TemplateOneTimePassword
+            {
+                Delivery = OneTimePasswordDelivery.CopyCode,
+            },
+        };
+
+    /// <summary>
+    /// A button that fills a one-time passcode straight into your Android app.
+    /// </summary>
+    /// <param name="apps">
+    /// The apps the code may be delivered into. Meta matches the signing certificate, so a
+    /// wrong hash means the code silently never arrives.
+    /// </param>
+    /// <param name="text">The label. Meta supplies a translated default when unset.</param>
+    /// <param name="autofillText">The label shown while the code is being filled in.</param>
+    /// <param name="zeroTap">
+    /// Whether the code should reach the app without the customer tapping anything. Setting
+    /// it also accepts Meta's zero-tap terms, which it will not approve the template without.
+    /// </param>
+    /// <remarks>
+    /// Falls back to copying on iOS and on any handset that cannot autofill, so this is
+    /// always at least as good as <see cref="CopyOneTimePassword"/>.
+    /// </remarks>
+    public static TemplateButton AutofillOneTimePassword(
+        IReadOnlyList<TemplateApplication> apps,
+        string? text = null,
+        string? autofillText = null,
+        bool zeroTap = false)
+    {
+        ArgumentNullException.ThrowIfNull(apps);
+
+        if (apps.Count == 0)
+        {
+            throw new ArgumentException(
+                "An autofilled passcode is delivered into an app, so at least one has to be " +
+                "named. Use CopyOneTimePassword for a button that only copies the code.",
+                nameof(apps));
+        }
+
+        return new TemplateButton(TemplateButtonKind.OneTimePassword)
+        {
+            Text = text,
+            OneTimePassword = new TemplateOneTimePassword
+            {
+                Delivery = zeroTap ? OneTimePasswordDelivery.ZeroTap : OneTimePasswordDelivery.OneTap,
+                AutofillText = autofillText,
+                SupportedApps = apps,
+                ZeroTapTermsAccepted = zeroTap ? true : null,
+            },
+        };
+    }
+
+    /// <summary>
     /// A button of a kind this library has no typed form for.
     /// </summary>
     /// <remarks>
@@ -335,6 +481,15 @@ public sealed record Template
     /// <summary>The small print below the body. At most 60 characters, and no placeholders.</summary>
     public string? Footer { get; init; }
 
+    /// <summary>
+    /// How long the passcode stays valid, in minutes, written into the footer by Meta.
+    /// </summary>
+    /// <remarks>
+    /// Authentication templates only, and it replaces <see cref="Footer"/> rather than
+    /// joining it: Meta writes the sentence itself so it is translated everywhere.
+    /// </remarks>
+    public int? CodeExpirationMinutes { get; init; }
+
     /// <summary>The buttons, at most ten between them.</summary>
     public IReadOnlyList<TemplateButton> Buttons { get; init; } = [];
 
@@ -342,4 +497,68 @@ public sealed record Template
     /// How long Meta keeps trying to deliver a message built from this template.
     /// </summary>
     public TimeSpan? TimeToLive { get; init; }
+
+    /// <summary>How recipients have been receiving it, when Meta reported it. Read only.</summary>
+    public TemplateQuality QualityScore { get; init; }
+
+    /// <summary>Why review turned it down, when it did. Read only.</summary>
+    public string? RejectedReason { get; init; }
+
+    /// <summary>
+    /// The category it sat in before Meta moved it, when Meta moved it. Read only.
+    /// </summary>
+    public TemplateCategory PreviousCategory { get; init; }
+
+    /// <summary>
+    /// An authentication template: a one-time passcode and the button that hands it over.
+    /// </summary>
+    /// <param name="name">The template name.</param>
+    /// <param name="language">Its locale.</param>
+    /// <param name="button">
+    /// How the passcode is delivered — <see cref="TemplateButton.CopyOneTimePassword"/> or
+    /// <see cref="TemplateButton.AutofillOneTimePassword"/>.
+    /// </param>
+    /// <param name="codeExpirationMinutes">
+    /// How long the code stays valid. Meta writes it into the footer, translated.
+    /// </param>
+    /// <param name="addSecurityRecommendation">
+    /// Whether Meta should append its "do not share this code" line to the body.
+    /// </param>
+    /// <remarks>
+    /// Authentication templates carry no text of their own: Meta writes the body and the
+    /// footer in every language it supports, which is the whole point of the category. All
+    /// this builds is the shape, so the rest of the library does not have to special-case it.
+    /// </remarks>
+    public static Template Authentication(
+        string name,
+        string language,
+        TemplateButton button,
+        int? codeExpirationMinutes = null,
+        bool addSecurityRecommendation = true)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+
+        if (button.Kind != TemplateButtonKind.OneTimePassword)
+        {
+            throw new ArgumentException(
+                "An authentication template carries a one-time-passcode button. Build one with " +
+                $"{nameof(TemplateButton)}.{nameof(TemplateButton.CopyOneTimePassword)} or " +
+                $"{nameof(TemplateButton.AutofillOneTimePassword)}.",
+                nameof(button));
+        }
+
+        return new Template
+        {
+            Name = name,
+            Language = language,
+            Category = TemplateCategory.Authentication,
+            Body = new TemplateBody
+            {
+                Text = string.Empty,
+                AddSecurityRecommendation = addSecurityRecommendation,
+            },
+            CodeExpirationMinutes = codeExpirationMinutes,
+            Buttons = [button],
+        };
+    }
 }

@@ -30,7 +30,8 @@ public sealed record MediaInfo
 /// Owns the underlying network response. Dispose it, or the connection stays checked out of
 /// the pool.
 /// </remarks>
-public sealed class MediaContent(Stream content, string? mimeType, long? fileSize) : IDisposable
+public sealed class MediaContent(Stream content, string? mimeType, long? fileSize)
+    : IDisposable, IAsyncDisposable
 {
     /// <summary>The bytes. Read once, forward only.</summary>
     public Stream Content { get; } = content;
@@ -43,4 +44,10 @@ public sealed class MediaContent(Stream content, string? mimeType, long? fileSiz
 
     /// <inheritdoc />
     public void Dispose() => Content.Dispose();
+
+    /// <summary>
+    /// Releases the underlying response without blocking the thread on the last of the
+    /// socket teardown, which is what <c>await using</c> gets you over <c>using</c>.
+    /// </summary>
+    public ValueTask DisposeAsync() => Content.DisposeAsync();
 }

@@ -32,10 +32,16 @@ public interface IFlowsApi
     /// Check whether this particular number could send the Flow, rather than only whether the
     /// Flow itself is in a state to be sent.
     /// </param>
+    /// <param name="includePreview">
+    /// Whether to fetch the shareable preview link as well. Off by default: the link needs no
+    /// login and lasts thirty days, so it is not something to pull into every read and every
+    /// log line that follows. <see cref="GetPreviewAsync"/> asks for it on its own.
+    /// </param>
     /// <param name="cancellationToken">Cancels the call.</param>
     Task<Flow> GetAsync(
         string flowId,
         string? healthCheckPhoneNumberId = null,
+        bool includePreview = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -15,9 +15,11 @@ namespace Wapper.RateLimiting.Redis;
 /// counters have to be shared to be worth anything.
 /// </para>
 /// <para>
-/// The whole read-refill-decrement cycle happens inside a Lua script, which Redis runs
-/// atomically. Doing it with separate round trips would let two instances read the same
-/// balance and both spend it.
+/// One call spends several budgets, and it spends all of them or none. That is why the whole
+/// read-refill-decrement cycle for every budget happens inside a single Lua script, which
+/// Redis runs atomically: separate round trips would let two instances read the same balance
+/// and both spend it, and would leave permits stranded in the budgets that were granted when
+/// a later one refused.
 /// </para>
 /// <para>
 /// Time comes from Redis rather than from the callers. Instances disagree about the clock,
@@ -33,70 +35,85 @@ internal sealed class RedisRateLimiter(
     ILogger<RedisRateLimiter> logger) : IWhatsAppRateLimiter
 {
     /// <summary>
-    /// Takes one permit, refilling first and honouring any penalty.
+    /// Takes one permit from every budget of a call, refilling each first and honouring any
+    /// penalty.
     /// </summary>
     /// <remarks>
-    /// Returns whether the permit was taken, and the wait it implies in milliseconds. The
-    /// wait is reported even when the permit is refused, so the caller can say how long it
-    /// would have had to wait.
+    /// <para>
+    /// All or nothing: the first pass works out what each budget would cost and writes
+    /// nothing, so a budget that refuses leaves the others untouched. Doing it the other way
+    /// round — spend, then hand back what the refused call took — is what the previous
+    /// version did across three round trips, and it could lose a permit whenever the process
+    /// died in between.
+    /// </para>
+    /// <para>
+    /// Returns whether the permits were taken, the longest wait they imply in milliseconds,
+    /// and the one-based position of the budget that refused. The wait is reported on a
+    /// refusal too, so the caller can say how long it would have had to wait.
+    /// </para>
     /// </remarks>
     private const string AcquireScript = """
         local clock = redis.call('TIME')
         local now = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
 
-        local burst = tonumber(ARGV[1])
-        local ratePerMs = tonumber(ARGV[2])
-        local maxWait = tonumber(ARGV[3])
-        local ttl = tonumber(ARGV[4])
-
-        local state = redis.call('HMGET', KEYS[1], 't', 's', 'h')
-        local tokens = tonumber(state[1])
-        local stamp = tonumber(state[2])
-        local hold = tonumber(state[3])
-
-        if tokens == nil then tokens = burst end
-        if stamp == nil then stamp = now end
-        if hold == nil then hold = 0 end
-
-        -- Time under penalty earns nothing, or a long hold would bank a burst and release
-        -- it the instant the hold expired.
-        local from = stamp
-        if hold > from then from = hold end
-        if now > from then
-          tokens = tokens + ((now - from) * ratePerMs)
-          if tokens > burst then tokens = burst end
-        end
+        local maxWait = tonumber(ARGV[1])
+        local ttl = tonumber(ARGV[2])
 
         local wait = 0
-        if tokens < 1 then wait = (1 - tokens) / ratePerMs end
-        if hold > now and (hold - now) > wait then wait = hold - now end
+        local tokens = {}
+        local holds = {}
 
-        if wait > maxWait then
-          return {0, math.floor(wait)}
+        -- First pass: price every budget, write nothing.
+        for i = 1, #KEYS do
+          local burst = tonumber(ARGV[1 + (i * 2)])
+          local ratePerMs = tonumber(ARGV[2 + (i * 2)])
+
+          local state = redis.call('HMGET', KEYS[i], 't', 's', 'h')
+          local t = tonumber(state[1])
+          local stamp = tonumber(state[2])
+          local hold = tonumber(state[3])
+
+          if t == nil then t = burst end
+          if stamp == nil then stamp = now end
+          if hold == nil then hold = 0 end
+
+          -- Time under penalty earns nothing, or a long hold would bank a burst and release
+          -- it the instant the hold expired.
+          local from = stamp
+          if hold > from then from = hold end
+          if now > from then
+            t = t + ((now - from) * ratePerMs)
+            if t > burst then t = burst end
+          end
+
+          local budgetWait = 0
+          if t < 1 then budgetWait = (1 - t) / ratePerMs end
+          if hold > now and (hold - now) > budgetWait then budgetWait = hold - now end
+
+          if budgetWait > maxWait then
+            return {0, math.floor(budgetWait), i}
+          end
+
+          if budgetWait > wait then wait = budgetWait end
+
+          tokens[i] = t - 1
+          holds[i] = hold
         end
 
-        tokens = tokens - 1
-        redis.call('HSET', KEYS[1], 't', tokens, 's', now, 'h', hold)
+        -- Second pass: nothing refused, so spend them all.
+        for i = 1, #KEYS do
+          redis.call('HSET', KEYS[i], 't', tokens[i], 's', now, 'h', holds[i])
 
-        -- A budget under penalty has to outlive its penalty, whatever the configured
-        -- lifetime says.
-        local expiry = ttl
-        if hold > now and (hold - now) + 60000 > expiry then expiry = (hold - now) + 60000 end
-        redis.call('PEXPIRE', KEYS[1], expiry)
+          -- A budget under penalty has to outlive its penalty, whatever the configured
+          -- lifetime says.
+          local expiry = ttl
+          if holds[i] > now and (holds[i] - now) + 60000 > expiry then
+            expiry = (holds[i] - now) + 60000
+          end
+          redis.call('PEXPIRE', KEYS[i], expiry)
+        end
 
-        return {1, math.floor(wait)}
-        """;
-
-    /// <summary>Gives back a permit taken by <see cref="AcquireScript"/>.</summary>
-    private const string ReturnScript = """
-        local burst = tonumber(ARGV[1])
-        local tokens = tonumber(redis.call('HGET', KEYS[1], 't'))
-        if tokens == nil then return 0 end
-
-        tokens = tokens + 1
-        if tokens > burst then tokens = burst end
-        redis.call('HSET', KEYS[1], 't', tokens)
-        return 1
+        return {1, math.floor(wait), 0}
         """;
 
     /// <summary>Holds a budget back after the Cloud API rejected a call.</summary>
@@ -138,58 +155,35 @@ internal sealed class RedisRateLimiter(
     {
         ArgumentNullException.ThrowIfNull(requests);
 
-        IDatabase database;
+        if (requests.Count == 0)
+        {
+            return;
+        }
+
+        AcquireResult result;
 
         try
         {
-            database = redis.GetDatabase();
+            result = await AcquireAsync(requests, maxWait).ConfigureAwait(false);
         }
-        catch (RedisException exception)
+        catch (Exception exception) when (IsRedisFailure(exception))
         {
             await FallBackAsync(exception, requests, maxWait, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        var wait = TimeSpan.Zero;
-        List<RateLimitRequest>? taken = null;
-
-        for (var i = 0; i < requests.Count; i++)
+        if (!result.Granted)
         {
-            var request = requests[i];
-
-            AcquireResult result;
-
-            try
-            {
-                result = await AcquireAsync(database, request, maxWait).ConfigureAwait(false);
-            }
-            catch (RedisException exception)
-            {
-                await ReturnAllAsync(database, taken).ConfigureAwait(false);
-                await FallBackAsync(exception, requests, maxWait, cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
-            if (!result.Granted)
-            {
-                // Hand back what the earlier budgets already gave, or this call would spend
-                // permits it never used.
-                await ReturnAllAsync(database, taken).ConfigureAwait(false);
-
-                throw new WhatsAppRateLimitedException(request.Scope, result.Wait, maxWait);
-            }
-
-            (taken ??= new List<RateLimitRequest>(requests.Count)).Add(request);
-
-            if (result.Wait > wait)
-            {
-                wait = result.Wait;
-            }
+            // Nothing was spent: the script prices every budget before it writes any of them.
+            throw new WhatsAppRateLimitedException(
+                requests[result.RefusedIndex].Scope,
+                result.Wait,
+                maxWait);
         }
 
-        if (wait > TimeSpan.Zero)
+        if (result.Wait > TimeSpan.Zero)
         {
-            await Task.Delay(wait, time, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(result.Wait, time, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -211,7 +205,7 @@ internal sealed class RedisRateLimiter(
                     [(long)duration.TotalMilliseconds, (long)_options.KeyLifetime.TotalMilliseconds])
                 .ConfigureAwait(false);
         }
-        catch (RedisException exception)
+        catch (Exception exception) when (IsRedisFailure(exception))
         {
             logger.LogWarning(
                 exception,
@@ -225,65 +219,58 @@ internal sealed class RedisRateLimiter(
         }
     }
 
+    /// <summary>
+    /// Every way Redis says no.
+    /// </summary>
+    /// <remarks>
+    /// Catching <see cref="RedisException"/> alone is not enough, and the gap is the failure
+    /// that matters most in production: a Redis that has gone slow rather than away raises
+    /// <see cref="RedisTimeoutException"/>, which derives from <see cref="TimeoutException"/>
+    /// and not from <see cref="RedisException"/> at all. Letting that through would fail
+    /// every send outright while the fallback stood unused.
+    /// </remarks>
+    private static bool IsRedisFailure(Exception exception) =>
+        exception is RedisException or RedisTimeoutException or RedisCommandException;
+
     private async Task<AcquireResult> AcquireAsync(
-        IDatabase database,
-        RateLimitRequest request,
+        IReadOnlyList<RateLimitRequest> requests,
         TimeSpan maxWait)
     {
-        var burst = double.IsPositiveInfinity(request.Burst) ? Unbounded : request.Burst;
-        var ratePerMillisecond = double.IsPositiveInfinity(request.PermitsPerSecond)
-            ? Unbounded
-            : request.PermitsPerSecond / 1000d;
+        var keys = new RedisKey[requests.Count];
+        var values = new RedisValue[2 + (requests.Count * 2)];
 
-        var result = (RedisValue[]?)await database.ScriptEvaluateAsync(
-                AcquireScript,
-                [KeyFor(request.Scope)],
-                [
-                    burst,
-                    ratePerMillisecond,
-                    (long)maxWait.TotalMilliseconds,
-                    (long)_options.KeyLifetime.TotalMilliseconds,
-                ])
+        values[0] = (long)maxWait.TotalMilliseconds;
+        values[1] = (long)_options.KeyLifetime.TotalMilliseconds;
+
+        for (var i = 0; i < requests.Count; i++)
+        {
+            var request = requests[i];
+
+            keys[i] = KeyFor(request.Scope);
+            values[2 + (i * 2)] = double.IsPositiveInfinity(request.Burst) ? Unbounded : request.Burst;
+            values[3 + (i * 2)] = double.IsPositiveInfinity(request.PermitsPerSecond)
+                ? Unbounded
+                : request.PermitsPerSecond / 1000d;
+        }
+
+        var result = (RedisValue[]?)await redis.GetDatabase()
+            .ScriptEvaluateAsync(AcquireScript, keys, values)
             .ConfigureAwait(false);
 
-        if (result is not { Length: 2 })
+        if (result is not { Length: 3 })
         {
             throw new WhatsAppException(
                 "The Redis rate limiter script returned an unexpected result. This normally " +
                 "means the key is being written by something other than this library.");
         }
 
+        var refused = (int)result[2];
+
         return new AcquireResult(
             (long)result[0] == 1,
-            TimeSpan.FromMilliseconds((long)result[1]));
-    }
-
-    private async Task ReturnAllAsync(IDatabase database, List<RateLimitRequest>? requests)
-    {
-        if (requests is null)
-        {
-            return;
-        }
-
-        foreach (var request in requests)
-        {
-            var burst = double.IsPositiveInfinity(request.Burst) ? Unbounded : request.Burst;
-
-            try
-            {
-                await database.ScriptEvaluateAsync(ReturnScript, [KeyFor(request.Scope)], [burst])
-                    .ConfigureAwait(false);
-            }
-            catch (RedisException exception)
-            {
-                // Losing a permit costs one message of throughput and nothing else. Failing
-                // the call over it would be worse.
-                logger.LogWarning(
-                    exception,
-                    "Could not return a rate limit permit for {Scope} to Redis.",
-                    request.Scope);
-            }
-        }
+            TimeSpan.FromMilliseconds((long)result[1]),
+            // Lua counts from one, and reports zero when nothing refused.
+            refused > 0 ? refused - 1 : 0);
     }
 
     private ValueTask FallBackAsync(
@@ -310,7 +297,21 @@ internal sealed class RedisRateLimiter(
     }
 
     private RedisKey KeyFor(RateLimitScope scope) =>
-        $"{_options.KeyPrefix}{scope.Budget}:{scope.Key}";
+        $"{_options.KeyPrefix}{Name(scope.Budget)}:{scope.Key}";
 
-    private readonly record struct AcquireResult(bool Granted, TimeSpan Wait);
+    /// <remarks>
+    /// Written out rather than left to <c>ToString</c>, which reflects over the enum and
+    /// allocates on a path that runs on every call. The names are part of the key format and
+    /// have to stay put anyway, so spelling them here is what makes that promise checkable.
+    /// </remarks>
+    private static string Name(RateLimitBudget budget) => budget switch
+    {
+        RateLimitBudget.PhoneNumberThroughput => "PhoneNumberThroughput",
+        RateLimitBudget.RecipientPair => "RecipientPair",
+        RateLimitBudget.BusinessAccountRequests => "BusinessAccountRequests",
+        RateLimitBudget.ApplicationRequests => "ApplicationRequests",
+        _ => "Unknown",
+    };
+
+    private readonly record struct AcquireResult(bool Granted, TimeSpan Wait, int RefusedIndex);
 }

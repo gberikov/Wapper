@@ -107,6 +107,17 @@ public static class WhatsAppServiceCollectionExtensions
             .AddHttpClient<GraphApiClient>(HttpClientName)
             // Every tenant sets its own timeout, enforced per call. A timeout on the shared
             // client would cap them all at whichever tenant was registered first.
-            .ConfigureHttpClient(static client => client.Timeout = Timeout.InfiniteTimeSpan);
+            .ConfigureHttpClient(static client => client.Timeout = Timeout.InfiniteTimeSpan)
+            // IWhatsAppClient is a singleton and holds this client for the life of the
+            // process, so the factory never gets to hand it a rebuilt handler. Rotating the
+            // connections inside the handler instead is what keeps a DNS change to
+            // graph.facebook.com from being ignored until the next deployment.
+            .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            })
+            // Says out loud what is already true: the handler is never rotated, because
+            // nothing ever asks the factory for a second one.
+            .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
     }
 }

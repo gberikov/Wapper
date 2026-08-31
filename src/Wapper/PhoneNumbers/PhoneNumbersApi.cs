@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using Wapper.Internal;
 
@@ -100,7 +99,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Post,
                     Path = Target(phoneNumberId, credentials),
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TwoStepPinPayload),
                 },
@@ -190,7 +189,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Post,
                     Path = $"{Target(phoneNumberId, credentials)}/register",
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.RegisterPayload),
                     // Ten attempts per number per 72 hours, counting the failed ones. Spending

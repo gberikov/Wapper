@@ -116,10 +116,25 @@ internal static class GraphUsageHeaders
         return new UsageReading(highest, TimeSpan.FromMinutes(minutes));
     }
 
-    private static string? ReadHeader(HttpResponseMessage response, string name) =>
-        response.Headers.TryGetValues(name, out var values)
-            ? values.FirstOrDefault()
-            : null;
+    /// <remarks>
+    /// Enumerated by hand rather than with <c>FirstOrDefault</c>: this runs on every response
+    /// the client receives, and the header is usually absent, so the allocation of an
+    /// enumerator is the whole cost of the call.
+    /// </remarks>
+    private static string? ReadHeader(HttpResponseMessage response, string name)
+    {
+        if (!response.Headers.TryGetValues(name, out var values))
+        {
+            return null;
+        }
+
+        foreach (var value in values)
+        {
+            return value;
+        }
+
+        return null;
+    }
 
     private static T? Deserialise<T>(string raw, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
         where T : class

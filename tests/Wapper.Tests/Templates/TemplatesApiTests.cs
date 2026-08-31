@@ -4,6 +4,7 @@ using Wapper.Internal;
 using Wapper.RateLimiting;
 using Wapper.Templates;
 using Wapper.Tests.Fakes;
+using Wapper.Webhooks;
 
 namespace Wapper.Tests.Templates;
 
@@ -471,6 +472,131 @@ public class TemplatesApiTests
         Assert.DoesNotContain(
             limiter.Requested,
             r => r.Scope.Budget == RateLimitBudget.PhoneNumberThroughput);
+    }
+
+    [Fact]
+    public async Task A_media_header_without_the_sample_handle_still_reads()
+    {
+        // Meta does not promise to hand the sample handle back with a template it stored
+        // months ago. Throwing over it would take down the whole listing, not just the one
+        // component, and a listing is how an application finds out what it can send.
+        const string Page = """
+            {"data":[{"name":"n","language":"en","category":"MARKETING","status":"APPROVED","id":"1",
+              "components":[{"type":"HEADER","format":"IMAGE"},{"type":"BODY","text":"b"}]}]}
+            """;
+        var (templates, _) = Create(Page);
+
+        var template = await Single(templates);
+
+        Assert.Equal(TemplateHeaderFormat.Image, template.Header!.Format);
+        Assert.Null(template.Header.MediaHandle);
+    }
+
+    [Fact]
+    public async Task Buttons_that_arrive_without_their_sample_or_label_still_read()
+    {
+        const string Page = """
+            {"data":[{"name":"n","language":"en","category":"MARKETING","status":"APPROVED","id":"1",
+              "components":[{"type":"BODY","text":"b"},
+                            {"type":"BUTTONS","buttons":[{"type":"COPY_CODE"},
+                                                         {"type":"QUICK_REPLY"},
+                                                         {"type":"URL","text":"Track"}]}]}]}
+            """;
+        var (templates, _) = Create(Page);
+
+        var buttons = (await Single(templates)).Buttons;
+
+        Assert.Equal(3, buttons.Count);
+        Assert.Equal(TemplateButtonKind.CopyCode, buttons[0].Kind);
+        Assert.Null(buttons[0].CopyCodeExample);
+        Assert.Equal(TemplateButtonKind.QuickReply, buttons[1].Kind);
+        Assert.Equal(TemplateButtonKind.Url, buttons[2].Kind);
+        Assert.Null(buttons[2].Url);
+    }
+
+    [Fact]
+    public async Task An_authentication_template_carries_no_text_of_its_own()
+    {
+        var (templates, handler) = Create(Created);
+
+        await templates.CreateAsync(
+            Template.Authentication(
+                "verification_code",
+                "en_US",
+                TemplateButton.CopyOneTimePassword(),
+                codeExpirationMinutes: 10),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // Meta writes the body and the footer itself, in every language it supports, and
+        // rejects a template that brings its own.
+        var body = Component(handler, "BODY");
+        Assert.False(body.TryGetProperty("text", out _));
+        Assert.True(body.GetProperty("add_security_recommendation").GetBoolean());
+
+        var footer = Component(handler, "FOOTER");
+        Assert.Equal(10, footer.GetProperty("code_expiration_minutes").GetInt32());
+        Assert.False(footer.TryGetProperty("text", out _));
+
+        var button = Component(handler, "BUTTONS").GetProperty("buttons")[0];
+        Assert.Equal("OTP", button.GetProperty("type").GetString());
+        Assert.Equal("COPY_CODE", button.GetProperty("otp_type").GetString());
+    }
+
+    [Fact]
+    public async Task An_autofilled_passcode_names_the_apps_it_may_be_delivered_into()
+    {
+        var (templates, handler) = Create(Created);
+
+        await templates.CreateAsync(
+            Template.Authentication(
+                "verification_code",
+                "en_US",
+                TemplateButton.AutofillOneTimePassword(
+                    [new TemplateApplication("com.example.app", "K2h6uSdG3xY")],
+                    autofillText: "Autofill",
+                    zeroTap: true)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var button = Component(handler, "BUTTONS").GetProperty("buttons")[0];
+
+        Assert.Equal("ZERO_TAP", button.GetProperty("otp_type").GetString());
+        Assert.Equal("Autofill", button.GetProperty("autofill_text").GetString());
+        // Meta will not approve a zero-tap template without this.
+        Assert.True(button.GetProperty("zero_tap_terms_accepted").GetBoolean());
+
+        var app = button.GetProperty("supported_apps")[0];
+        Assert.Equal("com.example.app", app.GetProperty("package_name").GetString());
+        Assert.Equal("K2h6uSdG3xY", app.GetProperty("signature_hash").GetString());
+    }
+
+    [Fact]
+    public async Task A_passcode_button_reads_back_from_the_shape_Meta_used_before_supported_apps()
+    {
+        const string Page = """
+            {"data":[{"name":"n","language":"en","category":"AUTHENTICATION","status":"APPROVED","id":"1",
+              "quality_score":{"score":"GREEN"},"previous_category":"UTILITY",
+              "components":[{"type":"BODY","add_security_recommendation":true},
+                            {"type":"FOOTER","code_expiration_minutes":5},
+                            {"type":"BUTTONS","buttons":[{"type":"OTP","otp_type":"ONE_TAP",
+                                                          "text":"Copy code","autofill_text":"Autofill",
+                                                          "package_name":"com.example.app",
+                                                          "signature_hash":"K2h6uSdG3xY"}]}]}]}
+            """;
+        var (templates, _) = Create(Page);
+
+        var template = await Single(templates);
+
+        Assert.True(template.Body.AddSecurityRecommendation);
+        Assert.Equal(5, template.CodeExpirationMinutes);
+        Assert.Equal(TemplateQuality.Green, template.QualityScore);
+        Assert.Equal(TemplateCategory.Utility, template.PreviousCategory);
+
+        var otp = Assert.Single(template.Buttons).OneTimePassword!;
+        Assert.Equal(OneTimePasswordDelivery.OneTap, otp.Delivery);
+        // The older single-app pair is folded into the list, so a caller has one place to look.
+        var app = Assert.Single(otp.SupportedApps);
+        Assert.Equal("com.example.app", app.PackageName);
+        Assert.Equal("K2h6uSdG3xY", app.SignatureHash);
     }
 
     private static async Task<Template> Single(ITemplatesApi templates)

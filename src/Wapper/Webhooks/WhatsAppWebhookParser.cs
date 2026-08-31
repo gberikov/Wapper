@@ -488,8 +488,18 @@ public static class WhatsAppWebhookParser
             IsForwarded = common.Forwarded,
         };
 
-    private static string? ProfileNameOf(WebhookValue value, string from) =>
-        value.Contacts?.FirstOrDefault(c => c.WaId == from)?.Profile?.Name;
+    private static string? ProfileNameOf(WebhookValue value, string from)
+    {
+        foreach (var contact in value.Contacts ?? [])
+        {
+            if (string.Equals(contact.WaId, from, StringComparison.Ordinal))
+            {
+                return contact.Profile?.Name;
+            }
+        }
+
+        return null;
+    }
 
     private static DateTimeOffset ToTimestamp(string? timestamp) =>
         long.TryParse(timestamp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)
