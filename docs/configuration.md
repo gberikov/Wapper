@@ -1,22 +1,42 @@
 # Configuration
 
-Everything lives under one `WhatsApp` section, and it is found by name, so there is nothing
-to pass in:
+There are three ways to configure the client, and they can be combined.
+
+**The conventional section.** `WhatsApp` is found by name, so there is nothing to pass in:
 
 ```csharp
 builder.Services.AddWhatsApp();
 ```
 
-Settings can also be written in code, and the two mix — the delegate runs after the section
-is bound, so it wins:
+**A section of your own name**, for a host that keeps its settings somewhere else. What is
+passed in is the only thing read — a `WhatsApp` section elsewhere in the file is ignored:
 
 ```csharp
-// Everything from configuration, except this one value pinned here.
+builder.Services.AddWhatsApp(builder.Configuration.GetSection("Messaging:WhatsAppCloud"));
+```
+
+**In code**, for settings that are not configuration at all — a value computed at startup, or
+an application that has no `appsettings.json`:
+
+```csharp
+builder.Services.AddWhatsApp(o =>
+{
+    o.AccessToken = vault.Read("whatsapp-token");
+    o.PhoneNumberId = "106540352242922";
+});
+```
+
+The delegate runs after whichever section was bound, so **what is set in code wins and the
+rest still comes from configuration**. That is what makes pinning one value practical:
+
+```csharp
+// Everything from the WhatsApp section, except the API version.
 builder.Services.AddWhatsApp(o => o.GraphApiVersion = "v27.0");
 ```
 
-With no configuration registered at all — a console application, a test — the delegate is the
-whole configuration, and nothing complains about the missing section.
+If there is no section — a console application, a test, a bare `ServiceCollection` with no
+`IConfiguration` at all — the delegate is simply the whole configuration, and nothing
+complains about the section that is not there.
 
 ## One phone number
 
@@ -88,11 +108,11 @@ Three things worth knowing about the multi-tenant shape:
 If you would rather have one shape whatever the number of tenants, a single entry under
 `Tenants` works exactly as well — it just costs naming the tenant on every call.
 
-### Passing the section instead
+### Naming the section, even the conventional one
 
 `AddWhatsApp()` finds the tenants when they are asked for, which is enough for most hosts and
-is what lets a tenant added to configuration later work without a restart. Handing it the
-section instead makes it read them at registration:
+is what lets a tenant added to configuration later work without a restart. Passing the section
+— whatever it is called — makes it read them at registration instead:
 
 ```csharp
 builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
@@ -176,7 +196,8 @@ needed to send.
 The default tenant's settings are validated at startup, so a `Timeout` of zero or a
 `GraphApiVersion` of `latest` fails the host rather than the first send. A named tenant is
 validated when it is first used, unless the section was
-[passed in](#passing-the-section-instead), which validates every tenant at startup too.
+[named](#naming-the-section-even-the-conventional-one), which validates every tenant at
+startup too.
 
 Credentials are the exception either way, and deliberately: demanding them in configuration
 would make the arrangement below impossible.

@@ -321,6 +321,42 @@ public class ConventionalConfigurationTests
         Assert.Equal(4, options.Get("acme").MediaDownloadHosts.Count);
     }
 
+    [Fact]
+    public void A_section_of_another_name_is_read_instead_of_the_conventional_one()
+    {
+        // The other half of the bargain: naming a section means read that one, so a stray
+        // "WhatsApp" section left in appsettings cannot quietly supply a token or an API
+        // version to an application that deliberately keeps its settings somewhere else.
+        var options = Resolve(
+            new Dictionary<string, string?>
+            {
+                ["WhatsApp:AccessToken"] = "the-wrong-token",
+                ["WhatsApp:GraphApiVersion"] = "v23.0",
+
+                ["Messaging:WhatsAppCloud:AccessToken"] = "the-right-token",
+                ["Messaging:WhatsAppCloud:PhoneNumberId"] = "106540352242922",
+                ["Messaging:WhatsAppCloud:Tenants:acme:PhoneNumberId"] = "111",
+            },
+            services => services.AddWhatsApp(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["AccessToken"] = "the-right-token",
+                        ["PhoneNumberId"] = "106540352242922",
+                        ["Tenants:acme:PhoneNumberId"] = "111",
+                    })
+                    .Build()));
+
+        var @default = options.Get(WhatsAppTenant.Default);
+        Assert.Equal("the-right-token", @default.AccessToken);
+        Assert.Equal("v26.0", @default.GraphApiVersion);
+
+        // Tenants hang off whichever section was named, not off "WhatsApp".
+        var acme = options.Get("acme");
+        Assert.Equal("111", acme.PhoneNumberId);
+        Assert.Equal("the-right-token", acme.AccessToken);
+    }
+
     private static IOptionsMonitor<WhatsAppOptions> Resolve(
         Dictionary<string, string?> settings,
         Action<IServiceCollection> register)
