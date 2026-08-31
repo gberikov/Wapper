@@ -20,6 +20,18 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
 
     private readonly ConcurrentDictionary<RateLimitScope, TokenBucket> _buckets = new();
 
+    /// <summary>
+    /// Holds recorded against a budget no call has spent yet.
+    /// </summary>
+    /// <remarks>
+    /// A usage header can name a budget before any call has paced against it — the business
+    /// account allowance turns up on the response to a message, which does not spend it — and
+    /// dropping the hold on the floor because there was nowhere to put it would let the next
+    /// management call walk into a block this one already saw. Kept as the timestamp the hold
+    /// runs to, and handed to the bucket the moment one is built.
+    /// </remarks>
+    private readonly ConcurrentDictionary<RateLimitScope, long> _pendingHolds = new();
+
     private long _lastSweepTimestamp = time.GetTimestamp();
 
     public async ValueTask WaitAsync(
@@ -68,22 +80,52 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
         TimeSpan duration,
         CancellationToken cancellationToken = default)
     {
-        if (duration > TimeSpan.Zero && _buckets.TryGetValue(scope, out var bucket))
+        if (duration <= TimeSpan.Zero)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        if (_buckets.TryGetValue(scope, out var bucket))
         {
             bucket.Penalise(duration);
+            return ValueTask.CompletedTask;
+        }
+
+        var until = time.GetTimestamp() + (long)(duration.TotalSeconds * time.TimestampFrequency);
+        _pendingHolds.AddOrUpdate(scope, until, (_, existing) => existing > until ? existing : until);
+
+        // A bucket built between the lookup and here would never see the hold, because it is
+        // only drained on the way in.
+        if (_buckets.TryGetValue(scope, out var raced) && _pendingHolds.TryRemove(scope, out _))
+        {
+            raced.Penalise(duration);
         }
 
         return ValueTask.CompletedTask;
     }
 
-    private TokenBucket GetBucket(RateLimitRequest request) =>
+    private TokenBucket GetBucket(RateLimitRequest request)
+    {
         // The allowance is captured when the bucket is created. A tenant that changes its
         // configured throughput at runtime keeps the old pacing until the bucket goes idle,
         // which is a fair trade for not rebuilding state on every call.
-        _buckets.GetOrAdd(
+        var bucket = _buckets.GetOrAdd(
             request.Scope,
             static (_, state) => new TokenBucket(state.Burst, state.PermitsPerSecond, state.Time),
             (request.Burst, request.PermitsPerSecond, Time: time));
+
+        if (_pendingHolds.TryRemove(request.Scope, out var until))
+        {
+            var remaining = time.GetElapsedTime(time.GetTimestamp(), until);
+
+            if (remaining > TimeSpan.Zero)
+            {
+                bucket.Penalise(remaining);
+            }
+        }
+
+        return bucket;
+    }
 
     private static void ReturnAll(List<TokenBucket>? buckets)
     {
@@ -125,6 +167,16 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
             if (bucket.IsIdleFor(IdleLifetime) && !bucket.IsHeld)
             {
                 _buckets.TryRemove(scope, out _);
+            }
+        }
+
+        foreach (var (scope, until) in _pendingHolds)
+        {
+            // A hold nobody ever came to collect. It has run out, so it would be handed over
+            // as a zero-length penalty anyway.
+            if (until <= now)
+            {
+                _pendingHolds.TryRemove(scope, out _);
             }
         }
     }

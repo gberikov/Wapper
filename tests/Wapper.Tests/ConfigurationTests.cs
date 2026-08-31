@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Wapper.RateLimiting;
 using Wapper.Tests.Fakes;
 
 namespace Wapper.Tests;
@@ -33,6 +34,57 @@ public class WhatsAppOptionsValidationTests
     public void Non_positive_timeout_is_rejected()
     {
         Assert.True(Validate(options => options.Timeout = TimeSpan.Zero).Failed);
+    }
+
+    [Fact]
+    public void A_base_address_that_is_not_https_is_rejected()
+    {
+        // The access token is a bearer token: it is worth exactly as much to whoever reads it
+        // off the wire.
+        var result = Validate(options => options.BaseAddress = new Uri("http://graph.facebook.com/"));
+
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, f => f.Contains("https", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_loopback_base_address_may_be_plaintext()
+    {
+        // A test server or a local proxy should not have to hold a certificate, and nothing
+        // leaves the machine.
+        Assert.True(Validate(options => options.BaseAddress = new Uri("http://localhost:8080/")).Succeeded);
+    }
+
+    [Theory]
+    [MemberData(nameof(BrokenRateLimits))]
+    public void A_rate_limit_that_could_never_pace_anything_is_rejected(
+        Action<WhatsAppRateLimitOptions> configure,
+        string expected)
+    {
+        // Every one of these is a value the limiter divides by or paces against. Left wrong,
+        // they surface in production as messages that never send, or as a block from Meta.
+        var result = Validate(options => configure(options.RateLimits));
+
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, f => f.Contains(expected, StringComparison.Ordinal));
+    }
+
+    public static TheoryData<Action<WhatsAppRateLimitOptions>, string> BrokenRateLimits() => new()
+    {
+        { limits => limits.MessagesPerSecond = 0, "MessagesPerSecond" },
+        { limits => limits.PairInterval = TimeSpan.Zero, "PairInterval" },
+        { limits => limits.PairBurst = 0, "PairBurst" },
+        { limits => limits.BusinessAccountRequestsPerHour = 0, "BusinessAccountRequestsPerHour" },
+        { limits => limits.MaxWait = TimeSpan.FromSeconds(-1), "MaxWait" },
+        { limits => limits.MaxRetries = -1, "MaxRetries" },
+        { limits => limits.UsagePercentThreshold = 0, "UsagePercentThreshold" },
+        { limits => limits.UsagePercentThreshold = 101, "UsagePercentThreshold" },
+    };
+
+    [Fact]
+    public void The_defaults_pass_their_own_validation()
+    {
+        Assert.True(Validate(_ => { }).Succeeded);
     }
 
     [Fact]

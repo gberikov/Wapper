@@ -2,6 +2,11 @@
 
   <PropertyGroup>
     <Description>Redis-backed rate limiter state for Wapper, so throttling budgets are shared across application instances.</Description>
+    <!-- StackExchange.Redis 2.x carries no trimming or AOT annotations, so this package
+         cannot honestly claim either. The other three still do; a consumer that needs
+         Native AOT keeps the in-process limiter. -->
+    <IsTrimmable>false</IsTrimmable>
+    <IsAotCompatible>false</IsAotCompatible>
   </PropertyGroup>
 
   <ItemGroup>

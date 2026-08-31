@@ -23,14 +23,41 @@ public readonly record struct RateLimitScope(RateLimitBudget Budget, string Key)
         new(RateLimitBudget.BusinessAccountRequests, businessAccountId);
 
     /// <summary>The platform-wide budget of the application.</summary>
-    /// <remarks>
-    /// Keyed by tenant, because the application id is not part of the credentials and
-    /// cannot be derived from a token. For the usual arrangement — one app, one set of
-    /// tenants — that is the same thing.
-    /// </remarks>
-    public static RateLimitScope ApplicationRequests(string tenant) =>
-        new(RateLimitBudget.ApplicationRequests, tenant);
+    /// <param name="application">
+    /// The Meta app id, when the credentials carry one, and the tenant name otherwise. Meta
+    /// counts this budget per app, so several tenants sharing one app have to share one
+    /// scope — holding back only the tenant that discovered the block would leave the others
+    /// hammering it, and Meta counts rejected calls too.
+    /// </param>
+    public static RateLimitScope ApplicationRequests(string application) =>
+        new(RateLimitBudget.ApplicationRequests, application);
 
     /// <inheritdoc />
     public override string ToString() => $"{Budget}({Key})";
+
+    /// <summary>
+    /// The key with a recipient's number reduced to its last four digits.
+    /// </summary>
+    /// <remarks>
+    /// Used in exception messages, which end up in logs. A pair scope is keyed by the
+    /// customer's phone number, and that is personal data nobody asked to have logged.
+    /// </remarks>
+    internal string RedactedKey
+    {
+        get
+        {
+            var separator = Key.IndexOf("->", StringComparison.Ordinal);
+
+            if (separator < 0)
+            {
+                return Key;
+            }
+
+            var recipient = Key.AsSpan(separator + 2);
+
+            return recipient.Length <= 4
+                ? Key
+                : string.Concat(Key.AsSpan(0, separator + 2), "…", recipient[^4..]);
+        }
+    }
 }

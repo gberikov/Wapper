@@ -39,7 +39,8 @@ public enum RateLimitBudget
     /// <remarks>
     /// Meta computes it as <c>200 × daily active users</c> and does not publish the number,
     /// so it cannot be paced ahead of time. It is only ever penalised after the fact, from
-    /// the error itself or from the <c>X-App-Usage</c> header.
+    /// the error itself or from the <c>X-App-Usage</c> header. Keyed by Meta app id, so
+    /// every tenant of a multi-tenant host backs off together.
     /// </remarks>
     ApplicationRequests,
 }

@@ -61,6 +61,71 @@ public class RetryTests
     }
 
     [Fact]
+    public async Task Every_configured_retry_is_actually_spent()
+    {
+        // The defaults are four retries spread over Meta's documented 1, 4, 16 and 64
+        // seconds. The last of those is longer than the default 30-second MaxWait, and MaxWait
+        // is what the limiter refuses on — so a client that applied it to its own backoff
+        // would quietly stop after three, and report the wait rather than the rejection.
+        var handler = StubHttpMessageHandler.Returning(
+            HttpStatusCode.BadRequest,
+            Rejection(WhatsAppErrorCodes.MessageThroughputReached));
+        var time = new FakeTimeProvider();
+        var client = CreateClient(handler, time);
+
+        var exception = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(
+            () => Clock.RunAsync(time, SendAsync(client)));
+
+        // The first attempt plus the four retries the options ask for.
+        Assert.Equal(5, handler.Requests.Count);
+
+        // And the caller is told what the Cloud API actually said, not what this client
+        // decided about its own patience.
+        Assert.Equal(WhatsAppErrorCodes.MessageThroughputReached, exception.Error!.Code);
+        Assert.IsType<WhatsAppApiException>(exception.InnerException);
+    }
+
+    [Fact]
+    public async Task A_timeout_is_reported_as_a_timeout_rather_than_as_a_cancellation()
+    {
+        // The per-tenant timeout is enforced with a token, so it surfaces as a cancellation
+        // that looks exactly like the caller's own. A request handler would log a client
+        // disconnect for what is really an unreachable Cloud API.
+        var time = new FakeTimeProvider();
+        var client = new GraphApiClient(
+            new HttpClient(new HangingHttpMessageHandler()) { Timeout = Timeout.InfiniteTimeSpan },
+            new StubCredentialsProvider(Credentials),
+            new InMemoryRateLimiter(time),
+            new StaticOptionsMonitor<WhatsAppOptions>(
+                new WhatsAppOptions { Timeout = TimeSpan.FromMilliseconds(50) }),
+            time);
+
+        var exception = await Assert.ThrowsAsync<WhatsAppException>(() => SendAsync(client));
+
+        Assert.IsNotType<TaskCanceledException>(exception);
+        Assert.Contains("timeout", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task The_caller_s_own_cancellation_is_still_a_cancellation()
+    {
+        var time = new FakeTimeProvider();
+        var client = new GraphApiClient(
+            new HttpClient(new HangingHttpMessageHandler()) { Timeout = Timeout.InfiniteTimeSpan },
+            new StubCredentialsProvider(Credentials),
+            new InMemoryRateLimiter(time),
+            new StaticOptionsMonitor<WhatsAppOptions>(new WhatsAppOptions()),
+            time);
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.SendAsync(
+            NewRequest() with { Kind = GraphCallKind.Message, Recipient = "79000000001" },
+            WhatsAppJsonContext.Default.GraphErrorEnvelope,
+            cancellation.Token));
+    }
+
+    [Fact]
     public async Task A_rejection_retrying_cannot_clear_is_not_retried()
     {
         var handler = StubHttpMessageHandler.Returning(

@@ -7,11 +7,25 @@ namespace Wapper.RateLimiting;
 internal static class ThrottlePolicy
 {
     /// <summary>
-    /// Meta publishes exactly one backoff formula — <c>4^X</c> seconds, X starting at zero —
-    /// given for the pair rate limit. It is the sanest default for the others too.
+    /// How long to wait before the next attempt.
     /// </summary>
-    public static TimeSpan Backoff(int attempt) =>
-        TimeSpan.FromSeconds(Math.Pow(4, Math.Clamp(attempt, 0, 5)));
+    /// <param name="attempt">Which attempt has just failed, counting from zero.</param>
+    /// <param name="retryAfter">
+    /// What the response's <c>Retry-After</c> header said, when it carried one.
+    /// </param>
+    /// <remarks>
+    /// Meta publishes exactly one backoff formula — <c>4^X</c> seconds, X starting at zero —
+    /// given for the pair rate limit, and it is the sanest default for the others too. The
+    /// Cloud API sends no <c>Retry-After</c>, so the header is read opportunistically for the
+    /// sake of whatever sits in front of it, and only ever lengthens the wait: a proxy asking
+    /// for one second does not override Meta's own documented sixteen.
+    /// </remarks>
+    public static TimeSpan Backoff(int attempt, TimeSpan? retryAfter = null)
+    {
+        var documented = TimeSpan.FromSeconds(Math.Pow(4, Math.Clamp(attempt, 0, 5)));
+
+        return retryAfter is { } hinted && hinted > documented ? hinted : documented;
+    }
 
     /// <summary>
     /// Whether the call is worth sending again, and which budget it exhausted.
@@ -62,6 +76,46 @@ internal static class ThrottlePolicy
             case WhatsAppErrorCodes.PerUserMarketingLimitReached:
             case WhatsAppErrorCodes.UserOptedOut:
             case WhatsAppErrorCodes.RegistrationLimitReached:
+
+            // Nothing about the token, the permission or the request changes on a retry, and
+            // Meta marks some of these transient anyway — which is why they are named here
+            // rather than left to is_transient below.
+            case WhatsAppErrorCodes.PermissionDenied:
+            case WhatsAppErrorCodes.InvalidParameter:
+            case WhatsAppErrorCodes.InvalidAccessToken:
+            case WhatsAppErrorCodes.PermissionError:
+            case WhatsAppErrorCodes.SenderAndRecipientMatch:
+            case WhatsAppErrorCodes.MessageUndeliverable:
+            case WhatsAppErrorCodes.AccountLocked:
+            case WhatsAppErrorCodes.BusinessEligibilityPaymentIssue:
+            case WhatsAppErrorCodes.RegistrationCertificateMismatch:
+
+            // The 24-hour window does not reopen on a retry. Only a template will get through.
+            case WhatsAppErrorCodes.ReEngagementRequired:
+            case WhatsAppErrorCodes.UnsupportedMessageType:
+
+            // A template that does not fit its parameters will not fit them a second later,
+            // and a paused or disabled one needs a human.
+            case WhatsAppErrorCodes.TemplateParameterCountMismatch:
+            case WhatsAppErrorCodes.TemplateDoesNotExist:
+            case WhatsAppErrorCodes.TemplateTextTooLong:
+            case WhatsAppErrorCodes.TemplateFormatCharacterPolicyViolated:
+            case WhatsAppErrorCodes.TemplateParameterFormatMismatch:
+            case WhatsAppErrorCodes.TemplatePaused:
+            case WhatsAppErrorCodes.TemplateDisabled:
+
+            // A Flow is blocked or throttled by Meta's monitoring for at least an hour, and
+            // the retries here are spread over seconds.
+            case WhatsAppErrorCodes.FlowBlocked:
+            case WhatsAppErrorCodes.FlowThrottled:
+
+            // Every one of these means the PIN, the code or the number is wrong, and three
+            // of them get stricter the more they are tried.
+            case WhatsAppErrorCodes.TwoStepPinMismatch:
+            case WhatsAppErrorCodes.PhoneNumberNotVerified:
+            case WhatsAppErrorCodes.TooManyPinGuesses:
+            case WhatsAppErrorCodes.PinGuessedTooFast:
+            case WhatsAppErrorCodes.PhoneNumberNotRegistered:
                 budget = null;
                 return false;
 

@@ -1,5 +1,4 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Wapper.Internal;
@@ -13,13 +12,19 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
     /// Everything Meta will say about one Flow.
     /// </summary>
     /// <remarks>
-    /// Only id, name, status, categories and validation errors come back by default. Asking
-    /// for the preview with <c>invalidate(false)</c> returns the link that already exists
-    /// rather than minting a new one and breaking the old.
+    /// Only id, name, status, categories and validation errors come back by default. The
+    /// preview is deliberately not in this list: the link it returns needs no login and lasts
+    /// thirty days, so fetching one on every read spreads a shareable link through the logs
+    /// of code that never asked for it.
     /// </remarks>
     private const string Fields =
-        "id,name,status,categories,validation_errors,json_version,data_api_version," +
-        "endpoint_uri,preview.invalidate(false)";
+        "id,name,status,categories,validation_errors,json_version,data_api_version,endpoint_uri";
+
+    /// <summary>
+    /// Asks for the existing preview link rather than minting a new one, which
+    /// <c>invalidate(true)</c> would do — breaking every link already handed out.
+    /// </summary>
+    private const string PreviewField = "preview.invalidate(false)";
 
     /// <summary>Meta insists on both of these values, exactly.</summary>
     private const string AssetName = "flow.json";
@@ -65,6 +70,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
     public async Task<Flow> GetAsync(
         string flowId,
         string? healthCheckPhoneNumberId = null,
+        bool includePreview = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(flowId);
@@ -78,13 +84,15 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
             ? "health_status"
             : $"health_status.phone_number({Uri.EscapeDataString(healthCheckPhoneNumberId)})";
 
+        var fields = includePreview ? $"{Fields},{PreviewField},{health}" : $"{Fields},{health}";
+
         var payload = await client.SendAsync(
                 new GraphRequest
                 {
                     Tenant = tenant,
                     Credentials = credentials,
                     Method = HttpMethod.Get,
-                    Path = $"{flowId}?fields={Fields},{health}",
+                    Path = $"{flowId}?fields={fields}",
                     Kind = GraphCallKind.Management,
                 },
                 WhatsAppJsonContext.Default.FlowPayload,
@@ -138,7 +146,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Post,
                     Path = $"{accountId}/flows",
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.FlowDefinitionPayload),
                 },
@@ -193,7 +201,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Post,
                     Path = flowId,
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.FlowDefinitionPayload),
                 },
@@ -213,6 +221,12 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
         var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
             .ConfigureAwait(false);
 
+        // A retry has to send the document again, which is only possible if the stream can be
+        // wound back. When it cannot, one attempt is all there is: a second would upload an
+        // empty file, and Meta would store it.
+        var rewindable = json.CanSeek;
+        var origin = rewindable ? json.Position : 0L;
+
         var response = await client.SendAsync(
                 new GraphRequest
                 {
@@ -224,7 +238,15 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     // Form data, not a JSON body, for this one endpoint.
                     Content = () =>
                     {
-                        var file = new StreamContent(json);
+                        if (rewindable)
+                        {
+                            json.Position = origin;
+                        }
+
+                        // The stream belongs to the caller. StreamContent would close it when
+                        // the request message is disposed, taking away a stream the caller may
+                        // still be using and breaking the retry along with it.
+                        var file = new StreamContent(new NonClosingStream(json));
                         file.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
                         return new MultipartFormDataContent
@@ -234,9 +256,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                             { new StringContent(AssetType), "asset_type" },
                         };
                     },
-                    // The stream has already been read by the time a retry would happen, and
-                    // sending it again would upload an empty file.
-                    Retryable = false,
+                    Retryable = rewindable,
                 },
                 WhatsAppJsonContext.Default.FlowWriteResponse,
                 cancellationToken)

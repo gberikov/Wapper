@@ -10,8 +10,8 @@ public sealed class WhatsAppRateLimitedException : WhatsAppException
 {
     /// <summary>Raised by the client, before the call went anywhere.</summary>
     public WhatsAppRateLimitedException(RateLimitScope scope, TimeSpan retryAfter, TimeSpan maxWait)
-        : base($"Sending would exceed the {scope.Budget} rate limit for '{scope.Key}'. The call " +
-               $"would have to wait {retryAfter.TotalSeconds:0.##}s, which is longer than the " +
+        : base($"Sending would exceed the {scope.Budget} rate limit for '{scope.RedactedKey}'. The " +
+               $"call would have to wait {retryAfter.TotalSeconds:0.##}s, which is longer than the " +
                $"configured maximum of {maxWait.TotalSeconds:0.##}s.")
     {
         Scope = scope;
@@ -24,8 +24,8 @@ public sealed class WhatsAppRateLimitedException : WhatsAppException
         TimeSpan retryAfter,
         WhatsAppApiException apiException)
         : base($"The Cloud API rejected the call against the {scope.Budget} rate limit for " +
-               $"'{scope.Key}' and it did not succeed within the configured number of retries. " +
-               $"Try again in about {retryAfter.TotalSeconds:0.##}s. {apiException.Message}",
+               $"'{scope.RedactedKey}' and it did not succeed within the configured number of " +
+               $"retries. Try again in about {retryAfter.TotalSeconds:0.##}s. {apiException.Message}",
                apiException)
     {
         Scope = scope;

@@ -1,5 +1,4 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Net.Mail;
 using Wapper.Internal;
 
@@ -80,7 +79,7 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
                     Method = HttpMethod.Post,
                     Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_profile",
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.BusinessProfilePayload),
                 },

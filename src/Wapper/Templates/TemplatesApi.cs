@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using Wapper.Internal;
 
@@ -87,7 +86,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = $"{accountId}/message_templates",
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
                 },
@@ -134,7 +133,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = templateId,
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
                 },
@@ -161,7 +160,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = templateId,
                     Kind = GraphCallKind.Management,
-                    Content = () => JsonContent.Create(
+                    Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
                 },

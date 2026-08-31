@@ -158,14 +158,54 @@ public class InMemoryRateLimiterTests
     }
 
     [Fact]
-    public async Task Penalising_a_budget_nobody_has_used_does_nothing()
+    public async Task A_penalty_for_a_budget_nobody_has_spent_yet_is_kept_until_one_does()
     {
-        var limiter = new InMemoryRateLimiter(new FakeTimeProvider());
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.BusinessAccountRequests("waba-1");
 
-        await limiter.PenaliseAsync(
-            RateLimitScope.PhoneNumberThroughput("never-seen"),
-            TimeSpan.FromMinutes(1),
-            TestContext.Current.CancellationToken);
+        // Exactly what a usage header does: it names the account allowance on the response to
+        // a message, which does not spend that allowance and so has never built its bucket.
+        // Dropping the hold here would let the next management call walk into a block this
+        // one has already been told about.
+        await limiter.PenaliseAsync(scope, TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+
+        var exception = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(async () =>
+            await limiter.WaitAsync(
+                [new RateLimitRequest(scope, 200 / 3600d, 200)],
+                TimeSpan.Zero,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(RateLimitBudget.BusinessAccountRequests, exception.Scope.Budget);
+        Assert.True(exception.RetryAfter > TimeSpan.FromSeconds(55));
+    }
+
+    [Fact]
+    public async Task A_kept_penalty_is_handed_over_only_once()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.PhoneNumberThroughput("111");
+        var budgets = new[] { new RateLimitRequest(scope, 80, 80) };
+
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(16), TestContext.Current.CancellationToken);
+
+        var started = time.GetUtcNow();
+        await Clock.RunAsync(
+            time,
+            limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask());
+
+        Assert.True(time.GetUtcNow() - started >= TimeSpan.FromSeconds(16));
+
+        // Handing it over a second time would restart a hold that has already been served.
+        // The next call still pays back the permit the first one took out of a drained
+        // bucket, which at 80 a second is a fraction of a second — nowhere near the hold.
+        var afterwards = time.GetUtcNow();
+        await Clock.RunAsync(
+            time,
+            limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask());
+
+        Assert.True(time.GetUtcNow() - afterwards < TimeSpan.FromSeconds(1));
     }
 
     private static RateLimitRequest[] Budgets(string phoneNumberId, string recipient) =>

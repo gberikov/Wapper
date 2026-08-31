@@ -4,4 +4,11 @@
     <Description>Contracts, models and webhook payload types for the WhatsApp Cloud API. Referenced by Wapper and by anything that wants the types without the client.</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The mapping layer builds these models from what Meta sent, which is not always what
+         the public factories would accept. It needs the unvalidated constructors. -->
+    <InternalsVisibleTo Include="Wapper" />
+    <InternalsVisibleTo Include="Wapper.Tests" />
+  </ItemGroup>
+
 </Project>

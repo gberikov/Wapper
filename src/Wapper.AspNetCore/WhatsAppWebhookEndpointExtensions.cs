@@ -115,7 +115,7 @@ public static class WhatsAppWebhookEndpointExtensions
 
         // Checked against the bytes as they arrived. Re-serializing a parsed model would
         // change whitespace or ordering and produce a different digest.
-        if (!WhatsAppWebhookSignature.IsValid(body, signature, options.AppSecret))
+        if (!WhatsAppWebhookSignature.IsValid(body.WrittenSpan, signature, options.AppSecret))
         {
             logger.LogWarning("A webhook delivery failed signature verification and was rejected.");
             return Results.StatusCode(StatusCodes.Status403Forbidden);
@@ -125,7 +125,7 @@ public static class WhatsAppWebhookEndpointExtensions
 
         try
         {
-            events = WhatsAppWebhookParser.Parse(body);
+            events = WhatsAppWebhookParser.Parse(body.WrittenSpan);
         }
         catch (WhatsAppException exception)
         {
@@ -136,23 +136,73 @@ public static class WhatsAppWebhookEndpointExtensions
             return Results.Ok();
         }
 
+        return await DispatchAsync(context, events, logger).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Hands every event to its handlers, and reports whether they all got through.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One delivery carries many events. A handler that throws on the third must not stop the
+    /// fourth from being seen, so each is dispatched on its own and a failure is logged and
+    /// stepped over — otherwise one poisonous event silently costs you every event behind it.
+    /// </para>
+    /// <para>
+    /// The delivery is still failed at the end, because Meta redelivering it is the only
+    /// retry there is and swallowing the failure would lose the message for good. That does
+    /// mean the events that did succeed are delivered again on the retry, so handlers have to
+    /// be idempotent — which they have to be regardless, since Meta repeats deliveries of its
+    /// own accord.
+    /// </para>
+    /// </remarks>
+    private static async Task<IResult> DispatchAsync(
+        HttpContext context,
+        IReadOnlyList<WhatsAppEvent> events,
+        ILogger logger)
+    {
         var dispatcher = context.RequestServices.GetRequiredService<WhatsAppWebhookDispatcher>();
+        var failed = 0;
 
         foreach (var notification in events)
         {
-            await dispatcher
-                .DispatchAsync(context.RequestServices, notification, context.RequestAborted)
-                .ConfigureAwait(false);
+            try
+            {
+                await dispatcher
+                    .DispatchAsync(context.RequestServices, notification, context.RequestAborted)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                // The caller hung up. Nothing left to answer.
+                throw;
+            }
+            catch (Exception exception)
+            {
+                failed++;
+
+                logger.LogError(
+                    exception,
+                    "A handler for webhook event {EventType} threw. The rest of the delivery is " +
+                    "still being processed, and the delivery will be failed so Meta repeats it.",
+                    notification.GetType().Name);
+            }
         }
 
-        return Results.Ok();
+        return failed == 0
+            ? Results.Ok()
+            : Results.StatusCode(StatusCodes.Status500InternalServerError);
     }
 
     /// <summary>
     /// Reads the whole body, or gives up if it is too large.
     /// </summary>
-    /// <returns>The bytes, or <see langword="null"/> when the limit was passed.</returns>
-    private static async Task<byte[]?> ReadBodyAsync(HttpContext context)
+    /// <returns>
+    /// The bytes, or <see langword="null"/> when the limit was passed. Handed back as the
+    /// writer rather than as an array: the signature check and the parser both take a span,
+    /// so copying up to a megabyte out of it would buy nothing.
+    /// </returns>
+    private static async Task<ArrayBufferWriter<byte>?> ReadBodyAsync(HttpContext context)
     {
         var reader = context.Request.BodyReader;
         var buffer = new ArrayBufferWriter<byte>(4096);
@@ -177,7 +227,7 @@ public static class WhatsAppWebhookEndpointExtensions
 
             if (result.IsCompleted)
             {
-                return buffer.WrittenSpan.ToArray();
+                return buffer;
             }
         }
     }

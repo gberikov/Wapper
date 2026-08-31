@@ -52,6 +52,45 @@ public class ThrottlePolicyTests
         Assert.Null(budget);
     }
 
+    [Theory]
+    // Nothing about the token, the window or the template changes in the second between two
+    // attempts, and Meta marks several of these transient anyway — which is the whole reason
+    // they have to be named rather than left to is_transient.
+    [InlineData(WhatsAppErrorCodes.InvalidAccessToken)]
+    [InlineData(WhatsAppErrorCodes.PermissionDenied)]
+    [InlineData(WhatsAppErrorCodes.PermissionError)]
+    [InlineData(WhatsAppErrorCodes.InvalidParameter)]
+    [InlineData(WhatsAppErrorCodes.ReEngagementRequired)]
+    [InlineData(WhatsAppErrorCodes.MessageUndeliverable)]
+    [InlineData(WhatsAppErrorCodes.TemplateDoesNotExist)]
+    [InlineData(WhatsAppErrorCodes.TemplateParameterCountMismatch)]
+    [InlineData(WhatsAppErrorCodes.TemplatePaused)]
+    [InlineData(WhatsAppErrorCodes.FlowThrottled)]
+    [InlineData(WhatsAppErrorCodes.TwoStepPinMismatch)]
+    [InlineData(WhatsAppErrorCodes.TooManyPinGuesses)]
+    public void A_failure_a_retry_cannot_fix_is_not_retried_even_when_Meta_calls_it_transient(int code)
+    {
+        Assert.False(ThrottlePolicy.ShouldRetry(
+            new WhatsAppError { Code = code, IsTransient = true },
+            out var budget));
+
+        Assert.Null(budget);
+    }
+
+    [Fact]
+    public void A_retry_after_header_lengthens_the_backoff_but_never_shortens_it()
+    {
+        // Meta sends no Retry-After, so this is only ever something in front of it talking.
+        // Honouring a shorter one would undercut the only backoff Meta actually publishes.
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            ThrottlePolicy.Backoff(1, TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(
+            TimeSpan.FromSeconds(16),
+            ThrottlePolicy.Backoff(2, TimeSpan.FromSeconds(1)));
+    }
+
     [Fact]
     public void An_unknown_code_is_retried_only_when_Meta_calls_it_transient()
     {

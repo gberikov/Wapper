@@ -34,8 +34,24 @@ internal sealed class TemplateDefinitionPayload
     [JsonPropertyName("message_send_ttl_seconds")]
     public int? MessageSendTtlSeconds { get; set; }
 
+    /// <summary>Comes back on a read. An object, not the bare string the webhook sends.</summary>
+    [JsonPropertyName("quality_score")]
+    public TemplateQualityScorePayload? QualityScore { get; set; }
+
+    [JsonPropertyName("rejected_reason")]
+    public string? RejectedReason { get; set; }
+
+    [JsonPropertyName("previous_category")]
+    public string? PreviousCategory { get; set; }
+
     [JsonPropertyName("components")]
     public List<TemplateComponentDefinitionPayload>? Components { get; set; }
+}
+
+internal sealed class TemplateQualityScorePayload
+{
+    [JsonPropertyName("score")]
+    public string? Score { get; set; }
 }
 
 internal sealed class TemplateComponentDefinitionPayload
@@ -51,6 +67,14 @@ internal sealed class TemplateComponentDefinitionPayload
 
     [JsonPropertyName("example")]
     public TemplateExamplePayload? Example { get; set; }
+
+    /// <summary>Authentication body only: Meta appends its own "do not share" line.</summary>
+    [JsonPropertyName("add_security_recommendation")]
+    public bool? AddSecurityRecommendation { get; set; }
+
+    /// <summary>Authentication footer only, and it replaces the footer text.</summary>
+    [JsonPropertyName("code_expiration_minutes")]
+    public int? CodeExpirationMinutes { get; set; }
 
     [JsonPropertyName("buttons")]
     public List<TemplateButtonDefinitionPayload>? Buttons { get; set; }
@@ -106,6 +130,37 @@ internal sealed class TemplateButtonDefinitionPayload
 
     [JsonPropertyName("example")]
     public TemplateButtonExamplePayload? Example { get; set; }
+
+    // One-time-passcode buttons, on authentication templates.
+
+    [JsonPropertyName("otp_type")]
+    public string? OtpType { get; set; }
+
+    [JsonPropertyName("autofill_text")]
+    public string? AutofillText { get; set; }
+
+    /// <summary>Superseded by <see cref="SupportedApps"/>, and still sent by older accounts.</summary>
+    [JsonPropertyName("package_name")]
+    public string? PackageName { get; set; }
+
+    /// <inheritdoc cref="PackageName" />
+    [JsonPropertyName("signature_hash")]
+    public string? SignatureHash { get; set; }
+
+    [JsonPropertyName("supported_apps")]
+    public List<TemplateApplicationPayload>? SupportedApps { get; set; }
+
+    [JsonPropertyName("zero_tap_terms_accepted")]
+    public bool? ZeroTapTermsAccepted { get; set; }
+}
+
+internal sealed class TemplateApplicationPayload
+{
+    [JsonPropertyName("package_name")]
+    public string? PackageName { get; set; }
+
+    [JsonPropertyName("signature_hash")]
+    public string? SignatureHash { get; set; }
 }
 
 /// <summary>

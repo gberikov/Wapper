@@ -1,4 +1,5 @@
 using Wapper.Internal;
+using Wapper.Webhooks;
 
 namespace Wapper.Templates;
 
@@ -19,16 +20,22 @@ internal static class TemplateMapping
         components.Add(new TemplateComponentDefinitionPayload
         {
             Type = "BODY",
-            Text = template.Body.Text,
+            // Left out on an authentication template, which Meta writes itself and refuses
+            // to accept text for.
+            Text = string.IsNullOrEmpty(template.Body.Text) ? null : template.Body.Text,
             Example = BodyExample(template.Body.Examples, template.ParameterFormat),
+            AddSecurityRecommendation = template.Body.AddSecurityRecommendation,
         });
 
-        if (!string.IsNullOrEmpty(template.Footer))
+        if (!string.IsNullOrEmpty(template.Footer) || template.CodeExpirationMinutes is not null)
         {
             components.Add(new TemplateComponentDefinitionPayload
             {
                 Type = "FOOTER",
-                Text = template.Footer,
+                // The expiry replaces the footer text rather than joining it: Meta writes
+                // that sentence itself so it comes out translated.
+                Text = template.CodeExpirationMinutes is null ? template.Footer : null,
+                CodeExpirationMinutes = template.CodeExpirationMinutes,
             });
         }
 
@@ -64,6 +71,7 @@ internal static class TemplateMapping
         TemplateHeader? header = null;
         TemplateBody? body = null;
         string? footer = null;
+        int? codeExpiration = null;
         IReadOnlyList<TemplateButton> buttons = [];
 
         foreach (var component in payload.Components ?? [])
@@ -79,11 +87,13 @@ internal static class TemplateMapping
                     {
                         Text = component.Text ?? string.Empty,
                         Examples = ReadBodyExamples(component.Example),
+                        AddSecurityRecommendation = component.AddSecurityRecommendation,
                     };
                     break;
 
                 case "FOOTER":
                     footer = component.Text;
+                    codeExpiration = component.CodeExpirationMinutes;
                     break;
 
                 case "BUTTONS":
@@ -112,12 +122,29 @@ internal static class TemplateMapping
             // was not a template at all.
             Body = body ?? new TemplateBody { Text = string.Empty },
             Footer = footer,
+            CodeExpirationMinutes = codeExpiration,
             Buttons = buttons,
             TimeToLive = payload.MessageSendTtlSeconds is { } seconds
                 ? TimeSpan.FromSeconds(seconds)
                 : null,
+            QualityScore = ParseQuality(payload.QualityScore?.Score),
+            RejectedReason = payload.RejectedReason,
+            PreviousCategory = ParseCategory(payload.PreviousCategory),
         };
     }
+
+    /// <remarks>
+    /// Meta spells the same four ratings two ways depending on which endpoint you ask, so
+    /// both spellings are accepted — as they are for the webhook that reports the same thing.
+    /// </remarks>
+    internal static TemplateQuality ParseQuality(string? score) => score?.ToUpperInvariant() switch
+    {
+        "GREEN" or "HIGH" => TemplateQuality.Green,
+        "YELLOW" or "MEDIUM" => TemplateQuality.Yellow,
+        "RED" or "LOW" => TemplateQuality.Red,
+        "UNKNOWN" or "PENDING" => TemplateQuality.Pending,
+        _ => TemplateQuality.Unknown,
+    };
 
     public static TemplateCategory ParseCategory(string? category) =>
         category?.ToUpperInvariant() switch
@@ -235,16 +262,23 @@ internal static class TemplateMapping
         Example = example.Value,
     };
 
+    /// <remarks>
+    /// Built through the internal constructor rather than the public factories: those
+    /// validate, and Meta does not promise to send a media handle back with a template it
+    /// stored months ago. Failing here would take down the whole listing over one component.
+    /// </remarks>
     private static TemplateHeader? ToHeader(TemplateComponentDefinitionPayload component) =>
         component.Format?.ToUpperInvariant() switch
         {
-            "TEXT" => TemplateHeader.FromText(
-                component.Text ?? " ",
-                [.. ReadHeaderExamples(component.Example)]),
-            "IMAGE" => TemplateHeader.FromImage(FirstHandle(component) ?? " "),
-            "VIDEO" => TemplateHeader.FromVideo(FirstHandle(component) ?? " "),
-            "DOCUMENT" => TemplateHeader.FromDocument(FirstHandle(component) ?? " "),
-            "LOCATION" => TemplateHeader.FromLocation(),
+            "TEXT" => new TemplateHeader(TemplateHeaderFormat.Text)
+            {
+                Text = component.Text,
+                Examples = ReadHeaderExamples(component.Example),
+            },
+            "IMAGE" => new TemplateHeader(TemplateHeaderFormat.Image) { MediaHandle = FirstHandle(component) },
+            "VIDEO" => new TemplateHeader(TemplateHeaderFormat.Video) { MediaHandle = FirstHandle(component) },
+            "DOCUMENT" => new TemplateHeader(TemplateHeaderFormat.Document) { MediaHandle = FirstHandle(component) },
+            "LOCATION" => new TemplateHeader(TemplateHeaderFormat.Location),
             _ => null,
         };
 
@@ -310,19 +344,106 @@ internal static class TemplateMapping
             Type = "VOICE_CALL",
             Text = button.Text,
         },
+        TemplateButtonKind.OneTimePassword => OtpToPayload(button),
         _ => throw new ArgumentException(
             $"'{button.Kind}' is not a button the Cloud API accepts.",
             nameof(button)),
     };
 
+    private static TemplateButtonDefinitionPayload OtpToPayload(TemplateButton button)
+    {
+        var otp = button.OneTimePassword ?? throw new ArgumentException(
+            "A one-time-passcode button has to say how the code is delivered. Build one with " +
+            $"{nameof(TemplateButton)}.{nameof(TemplateButton.CopyOneTimePassword)} or " +
+            $"{nameof(TemplateButton.AutofillOneTimePassword)}.",
+            nameof(button));
+
+        return new TemplateButtonDefinitionPayload
+        {
+            Type = "OTP",
+            Text = button.Text,
+            OtpType = otp.Delivery switch
+            {
+                OneTimePasswordDelivery.CopyCode => "COPY_CODE",
+                OneTimePasswordDelivery.OneTap => "ONE_TAP",
+                OneTimePasswordDelivery.ZeroTap => "ZERO_TAP",
+                _ => throw new ArgumentException(
+                    $"'{otp.Delivery}' is not a passcode delivery the Cloud API accepts.",
+                    nameof(button)),
+            },
+            AutofillText = otp.AutofillText,
+            // The newer of the two shapes. Meta reads the older package_name and
+            // signature_hash pair as a one-app list, so there is nothing to gain by sending it.
+            SupportedApps = otp.SupportedApps.Count == 0
+                ? null
+                : [.. otp.SupportedApps.Select(app => new TemplateApplicationPayload
+                {
+                    PackageName = app.PackageName,
+                    SignatureHash = app.SignatureHash,
+                })],
+            ZeroTapTermsAccepted = otp.ZeroTapTermsAccepted,
+        };
+    }
+
+    private static TemplateOneTimePassword ToOtp(TemplateButtonDefinitionPayload payload)
+    {
+        var apps = new List<TemplateApplication>();
+
+        foreach (var app in payload.SupportedApps ?? [])
+        {
+            apps.Add(new TemplateApplication(app.PackageName ?? string.Empty, app.SignatureHash ?? string.Empty));
+        }
+
+        // The shape Meta used before supported_apps, still returned for templates created
+        // under it. Folded into the list so a caller only has one place to look.
+        if (apps.Count == 0 && payload.PackageName is { } package)
+        {
+            apps.Add(new TemplateApplication(package, payload.SignatureHash ?? string.Empty));
+        }
+
+        return new TemplateOneTimePassword
+        {
+            Delivery = payload.OtpType?.ToUpperInvariant() switch
+            {
+                "COPY_CODE" => OneTimePasswordDelivery.CopyCode,
+                "ONE_TAP" => OneTimePasswordDelivery.OneTap,
+                "ZERO_TAP" => OneTimePasswordDelivery.ZeroTap,
+                _ => OneTimePasswordDelivery.Unknown,
+            },
+            RawDelivery = payload.OtpType,
+            AutofillText = payload.AutofillText,
+            SupportedApps = apps,
+            ZeroTapTermsAccepted = payload.ZeroTapTermsAccepted,
+        };
+    }
+
+    /// <inheritdoc cref="ToHeader" path="/remarks" />
     private static TemplateButton ToButton(TemplateButtonDefinitionPayload payload) =>
         payload.Type?.ToUpperInvariant() switch
         {
-            "QUICK_REPLY" => TemplateButton.QuickReply(payload.Text ?? " "),
-            "URL" => TemplateButton.Link(payload.Text ?? " ", payload.Url ?? " ", payload.Example?.First),
-            "PHONE_NUMBER" => TemplateButton.Call(payload.Text ?? " ", payload.PhoneNumber ?? " "),
-            "COPY_CODE" => TemplateButton.CopyCode(payload.Example?.First ?? " "),
-            "VOICE_CALL" => TemplateButton.VoiceCall(payload.Text ?? " "),
+            "QUICK_REPLY" => new TemplateButton(TemplateButtonKind.QuickReply) { Text = payload.Text },
+            "URL" => new TemplateButton(TemplateButtonKind.Url)
+            {
+                Text = payload.Text,
+                Url = payload.Url,
+                UrlExample = payload.Example?.First,
+            },
+            "PHONE_NUMBER" => new TemplateButton(TemplateButtonKind.PhoneNumber)
+            {
+                Text = payload.Text,
+                PhoneNumber = payload.PhoneNumber,
+            },
+            "COPY_CODE" => new TemplateButton(TemplateButtonKind.CopyCode)
+            {
+                Text = payload.Text,
+                CopyCodeExample = payload.Example?.First,
+            },
+            "VOICE_CALL" => new TemplateButton(TemplateButtonKind.VoiceCall) { Text = payload.Text },
+            "OTP" => new TemplateButton(TemplateButtonKind.OneTimePassword)
+            {
+                Text = payload.Text,
+                OneTimePassword = ToOtp(payload),
+            },
             _ => TemplateButton.FromUnknown(payload.Type, payload.Text),
         };
 }
