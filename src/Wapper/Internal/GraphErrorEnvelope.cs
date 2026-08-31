@@ -44,3 +44,18 @@ internal sealed class GraphErrorData
     [JsonPropertyName("details")]
     public string? Details { get; set; }
 }
+
+/// <summary>Turns the wire error into the one callers see.</summary>
+internal static class GraphErrorExtensions
+{
+    public static WhatsAppError ToError(this GraphError error) => new()
+    {
+        Code = error.Code,
+        Type = error.Type,
+        Message = error.Message,
+        Details = error.ErrorData?.Details,
+        TraceId = error.FbTraceId,
+        IsTransient = error.IsTransient,
+        Subcode = error.ErrorSubcode,
+    };
+}

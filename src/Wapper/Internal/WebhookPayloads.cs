@@ -1,0 +1,272 @@
+using System.Text.Json.Serialization;
+
+namespace Wapper.Internal;
+
+/// <summary>Wire shape of a webhook delivery.</summary>
+internal sealed class WebhookPayload
+{
+    [JsonPropertyName("object")]
+    public string? Object { get; set; }
+
+    [JsonPropertyName("entry")]
+    public List<WebhookEntry>? Entry { get; set; }
+}
+
+internal sealed class WebhookEntry
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("changes")]
+    public List<WebhookChange>? Changes { get; set; }
+}
+
+internal sealed class WebhookChange
+{
+    [JsonPropertyName("field")]
+    public string? Field { get; set; }
+
+    [JsonPropertyName("value")]
+    public WebhookValue? Value { get; set; }
+}
+
+internal sealed class WebhookValue
+{
+    [JsonPropertyName("messaging_product")]
+    public string? MessagingProduct { get; set; }
+
+    [JsonPropertyName("metadata")]
+    public WebhookMetadata? Metadata { get; set; }
+
+    [JsonPropertyName("contacts")]
+    public List<WebhookContact>? Contacts { get; set; }
+
+    [JsonPropertyName("messages")]
+    public List<WebhookMessage>? Messages { get; set; }
+
+    [JsonPropertyName("statuses")]
+    public List<WebhookStatus>? Statuses { get; set; }
+
+    [JsonPropertyName("errors")]
+    public List<GraphError>? Errors { get; set; }
+}
+
+internal sealed class WebhookMetadata
+{
+    [JsonPropertyName("display_phone_number")]
+    public string? DisplayPhoneNumber { get; set; }
+
+    [JsonPropertyName("phone_number_id")]
+    public string? PhoneNumberId { get; set; }
+}
+
+internal sealed class WebhookContact
+{
+    [JsonPropertyName("wa_id")]
+    public string? WaId { get; set; }
+
+    [JsonPropertyName("profile")]
+    public WebhookProfile? Profile { get; set; }
+}
+
+internal sealed class WebhookProfile
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+}
+
+internal sealed class WebhookMessage
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("from")]
+    public string? From { get; set; }
+
+    /// <summary>Unix seconds, sent as a string.</summary>
+    [JsonPropertyName("timestamp")]
+    public string? Timestamp { get; set; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("context")]
+    public WebhookContext? Context { get; set; }
+
+    [JsonPropertyName("text")]
+    public WebhookText? Text { get; set; }
+
+    [JsonPropertyName("image")]
+    public WebhookMedia? Image { get; set; }
+
+    [JsonPropertyName("audio")]
+    public WebhookMedia? Audio { get; set; }
+
+    [JsonPropertyName("video")]
+    public WebhookMedia? Video { get; set; }
+
+    [JsonPropertyName("document")]
+    public WebhookMedia? Document { get; set; }
+
+    [JsonPropertyName("sticker")]
+    public WebhookMedia? Sticker { get; set; }
+
+    [JsonPropertyName("location")]
+    public LocationPayload? Location { get; set; }
+
+    [JsonPropertyName("contacts")]
+    public List<ContactPayload>? Contacts { get; set; }
+
+    [JsonPropertyName("reaction")]
+    public ReactionPayload? Reaction { get; set; }
+
+    [JsonPropertyName("interactive")]
+    public WebhookInteractive? Interactive { get; set; }
+
+    [JsonPropertyName("button")]
+    public WebhookButton? Button { get; set; }
+
+    [JsonPropertyName("system")]
+    public WebhookSystem? System { get; set; }
+
+    [JsonPropertyName("errors")]
+    public List<GraphError>? Errors { get; set; }
+}
+
+internal sealed class WebhookContext
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("from")]
+    public string? From { get; set; }
+
+    [JsonPropertyName("forwarded")]
+    public bool Forwarded { get; set; }
+
+    [JsonPropertyName("frequently_forwarded")]
+    public bool FrequentlyForwarded { get; set; }
+}
+
+internal sealed class WebhookText
+{
+    [JsonPropertyName("body")]
+    public string? Body { get; set; }
+}
+
+internal sealed class WebhookMedia
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("mime_type")]
+    public string? MimeType { get; set; }
+
+    [JsonPropertyName("sha256")]
+    public string? Sha256 { get; set; }
+
+    [JsonPropertyName("caption")]
+    public string? Caption { get; set; }
+
+    [JsonPropertyName("filename")]
+    public string? FileName { get; set; }
+
+    [JsonPropertyName("voice")]
+    public bool Voice { get; set; }
+
+    [JsonPropertyName("animated")]
+    public bool Animated { get; set; }
+}
+
+internal sealed class WebhookInteractive
+{
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("button_reply")]
+    public WebhookInteractiveReply? ButtonReply { get; set; }
+
+    [JsonPropertyName("list_reply")]
+    public WebhookInteractiveReply? ListReply { get; set; }
+}
+
+internal sealed class WebhookInteractiveReply
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("title")]
+    public string? Title { get; set; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+}
+
+internal sealed class WebhookButton
+{
+    [JsonPropertyName("payload")]
+    public string? Payload { get; set; }
+
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
+}
+
+internal sealed class WebhookSystem
+{
+    [JsonPropertyName("body")]
+    public string? Body { get; set; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("wa_id")]
+    public string? WaId { get; set; }
+}
+
+internal sealed class WebhookStatus
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    public string? Timestamp { get; set; }
+
+    [JsonPropertyName("recipient_id")]
+    public string? RecipientId { get; set; }
+
+    [JsonPropertyName("conversation")]
+    public WebhookConversation? Conversation { get; set; }
+
+    [JsonPropertyName("pricing")]
+    public WebhookPricing? Pricing { get; set; }
+
+    [JsonPropertyName("errors")]
+    public List<GraphError>? Errors { get; set; }
+}
+
+internal sealed class WebhookConversation
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("origin")]
+    public WebhookConversationOrigin? Origin { get; set; }
+}
+
+internal sealed class WebhookConversationOrigin
+{
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+}
+
+internal sealed class WebhookPricing
+{
+    [JsonPropertyName("billable")]
+    public bool? Billable { get; set; }
+
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+}

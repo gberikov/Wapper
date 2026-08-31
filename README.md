@@ -70,6 +70,46 @@ SaaS — replace the credential lookup instead:
 builder.Services.AddSingleton<IWhatsAppCredentialsProvider, MyTenantCredentials>();
 ```
 
+## Receiving messages
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<Replier, TextMessage>();
+
+app.MapWhatsAppWebhook("/whatsapp");
+```
+
+```csharp
+public sealed class Replier(IWhatsAppClient whatsApp) : IWhatsAppEventHandler<TextMessage>
+{
+    public async Task HandleAsync(TextMessage message, CancellationToken ct)
+    {
+        await whatsApp.Messages.MarkAsReadAsync(message.Id, showTyping: true, ct);
+        await whatsApp.Messages.SendTextAsync(message.From, $"You said: {message.Text}", cancellationToken: ct);
+    }
+}
+```
+
+The endpoint answers the subscription handshake, verifies `X-Hub-Signature-256` against the
+raw body, and hands each event to the handlers registered for it. Register a handler for
+`IncomingMessage` or `WhatsAppEvent` to see everything of that shape.
+
+Two settings are required to receive anything, both from the Meta app dashboard:
+
+```jsonc
+{
+  "WhatsApp": {
+    "AppSecret": "...",
+    "WebhookVerifyToken": "..."
+  }
+}
+```
+
+Without `AppSecret` the endpoint refuses every delivery — it is public, and an unverified
+one could come from anyone.
+
+Meta expects a fast answer (median under 250 ms) and retries anything that fails for up to
+seven days, so put long work on a queue rather than in a handler.
+
 ## Why the rate limiting matters
 
 The Cloud API enforces four independent budgets, each with its own key and its
