@@ -26,6 +26,12 @@ public sealed class WhatsAppOptions
     public string? WhatsAppBusinessAccountId { get; set; }
 
     /// <summary>
+    /// Identifier of the Meta app, needed to upload a file to Meta — which is the only way to
+    /// set a business profile picture.
+    /// </summary>
+    public string? AppId { get; set; }
+
+    /// <summary>
     /// Graph API version used in request paths. Defaults to the newest version at the time
     /// of release.
     /// </summary>

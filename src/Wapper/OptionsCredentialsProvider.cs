@@ -38,6 +38,7 @@ internal sealed class OptionsCredentialsProvider(IOptionsMonitor<WhatsAppOptions
             AccessToken = tenantOptions.AccessToken,
             PhoneNumberId = tenantOptions.PhoneNumberId,
             WhatsAppBusinessAccountId = tenantOptions.WhatsAppBusinessAccountId,
+            AppId = tenantOptions.AppId,
         });
     }
 }

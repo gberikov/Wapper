@@ -47,6 +47,17 @@ internal sealed record GraphRequest
     /// </remarks>
     public Func<HttpContent>? Content { get; init; }
 
+    /// <summary>
+    /// Last look at the request before it goes out, for the few endpoints that need more than
+    /// a bearer token.
+    /// </summary>
+    /// <remarks>
+    /// Runs after the <c>Authorization</c> header is set, so it can replace it. The resumable
+    /// upload endpoint is the one caller: it wants the <c>OAuth</c> scheme rather than
+    /// <c>Bearer</c>, and a <c>file_offset</c> header alongside it.
+    /// </remarks>
+    public Action<HttpRequestMessage>? Configure { get; init; }
+
     /// <summary>What the call spends.</summary>
     public GraphCallKind Kind { get; init; } = GraphCallKind.Other;
 
