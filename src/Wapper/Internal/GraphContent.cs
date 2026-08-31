@@ -17,18 +17,22 @@ internal static class GraphContent
     /// here rather than inside the factory does the work once, and gives the request a
     /// <c>Content-Length</c> instead of chunking a body that is always small enough to count.
     /// </remarks>
-    public static Func<HttpContent> Json<TPayload>(TPayload payload, JsonTypeInfo<TPayload> typeInfo)
-    {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, typeInfo);
+    public static Func<HttpContent> Json<TPayload>(TPayload payload, JsonTypeInfo<TPayload> typeInfo) =>
+        Json(JsonSerializer.SerializeToUtf8Bytes(payload, typeInfo));
 
-        return () => new ByteArrayContent(bytes)
+    /// <summary>
+    /// A JSON body the caller wrote out itself, for the endpoints this library does not model.
+    /// </summary>
+    public static Func<HttpContent> Json(string json) => Json(Encoding.UTF8.GetBytes(json));
+
+    private static Func<HttpContent> Json(byte[] bytes) =>
+        () => new ByteArrayContent(bytes)
         {
             Headers =
             {
                 ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" },
             },
         };
-    }
 
     /// <summary>
     /// A form-encoded body, for the handful of endpoints that take one instead of JSON.

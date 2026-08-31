@@ -104,6 +104,7 @@ public static class WhatsAppServiceCollectionExtensions
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().BusinessProfile);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Flows);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Analytics);
+        services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Raw);
 
         return services
             .AddHttpClient<GraphApiClient>(HttpClientName)
