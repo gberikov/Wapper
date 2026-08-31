@@ -53,7 +53,22 @@ public abstract record IncomingMessage : WhatsAppEvent
     public string? ReplyToMessageId { get; init; }
 
     /// <summary>Whether the customer forwarded this from somewhere else.</summary>
+    /// <remarks>
+    /// Set for both kinds of forward, including the ones
+    /// <see cref="IsFrequentlyForwarded"/> covers.
+    /// </remarks>
     public bool IsForwarded { get; init; }
+
+    /// <summary>
+    /// Whether WhatsApp has seen this content forwarded many times over.
+    /// </summary>
+    /// <remarks>
+    /// Meta reports this separately from an ordinary forward, and it means something else: a
+    /// message forwarded more than five times along a chain, which is what chain letters,
+    /// hoaxes and viral scams look like. WhatsApp itself limits where these can be sent on
+    /// to. Worth its own branch for anything that filters or triages what arrives.
+    /// </remarks>
+    public bool IsFrequentlyForwarded { get; init; }
 
     /// <summary>
     /// The ad or post the customer came from, when they arrived through one.

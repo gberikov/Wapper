@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Wapper.Flows;
 using Wapper.Internal;
@@ -17,6 +18,29 @@ namespace Wapper.Webhooks;
 /// </remarks>
 public static class WhatsAppWebhookParser
 {
+    /// <summary>
+    /// How many accounts and numbers one delivery may name before it is refused outright.
+    /// </summary>
+    /// <remarks>
+    /// Meta sends one entry, occasionally a handful. The cap is on the routing scan, which
+    /// runs before the signature has been checked and therefore on anything at all.
+    /// </remarks>
+    private const int MaxOrigins = 64;
+
+    /// <summary>Nesting the routing scan will follow. A delivery is six deep.</summary>
+    private const int MaxScanDepth = 32;
+
+    /// <summary>
+    /// How long a routing identifier may be before the scan stops believing it.
+    /// </summary>
+    /// <remarks>
+    /// A phone number id and a business account id are fifteen digits. The cap is what keeps
+    /// a crafted body — this runs before the signature has been checked — from turning a
+    /// routing field into a megabyte of string, and the log line that names it into a
+    /// megabyte of somebody else's text.
+    /// </remarks>
+    private const int MaxIdLength = 128;
+
     /// <summary>Parses a webhook body.</summary>
     /// <param name="json">The raw body, exactly as it arrived.</param>
     /// <returns>The events it carried, in the order they appeared.</returns>
@@ -56,6 +80,176 @@ public static class WhatsAppWebhookParser
     /// <inheritdoc cref="Parse(ReadOnlySpan{byte})" />
     public static IReadOnlyList<WhatsAppEvent> Parse(string json) =>
         Parse(System.Text.Encoding.UTF8.GetBytes(json));
+
+    /// <summary>
+    /// Reads only the fields that say which account and number a delivery is about, without
+    /// trusting anything else in it.
+    /// </summary>
+    /// <param name="json">The raw body, exactly as it arrived.</param>
+    /// <returns>
+    /// One entry per business account named in the body, and one per phone number named
+    /// within it. Empty when the body is not a delivery, or names nothing.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// For choosing which app secret to check the signature against, which is a chicken and
+    /// egg: the body says which tenant it is for, and the body is not to be believed until
+    /// the signature has been checked. This is the smallest way out of it — a forward-only
+    /// scan that reads two property names and copies their values, allocating nothing else
+    /// and building no object graph.
+    /// </para>
+    /// <para>
+    /// Safe to run on an unverified body because of what is done with the result: it selects
+    /// a secret, and the signature still has to verify against it. A forged or unknown
+    /// identifier can therefore only ever cause a refusal, never an acceptance.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<WhatsAppWebhookOrigin> ReadOrigins(ReadOnlySpan<byte> json)
+    {
+        var origins = new List<WhatsAppWebhookOrigin>();
+        var reader = new Utf8JsonReader(json, new JsonReaderOptions { MaxDepth = MaxScanDepth });
+
+        // Depth of an entry object, once the `entry` array has been found. Below that the
+        // scan is looking for one property name and nothing else.
+        var entryDepth = -1;
+        var businessAccountId = string.Empty;
+        var numbers = new List<string>();
+
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject
+                    && entryDepth >= 0
+                    && reader.CurrentDepth == entryDepth)
+                {
+                    Flush(origins, businessAccountId, numbers);
+                    businessAccountId = string.Empty;
+                    numbers.Clear();
+
+                    if (origins.Count > MaxOrigins)
+                    {
+                        return [];
+                    }
+
+                    continue;
+                }
+
+                if (reader.TokenType != JsonTokenType.PropertyName)
+                {
+                    continue;
+                }
+
+                if (entryDepth < 0)
+                {
+                    if (reader.ValueTextEquals("entry"u8)
+                        && reader.Read()
+                        && reader.TokenType == JsonTokenType.StartArray)
+                    {
+                        entryDepth = reader.CurrentDepth + 1;
+                    }
+
+                    continue;
+                }
+
+                if (reader.CurrentDepth == entryDepth + 1 && reader.ValueTextEquals("id"u8))
+                {
+                    businessAccountId = Value(ref reader) ?? string.Empty;
+                }
+                else if (reader.ValueTextEquals("phone_number_id"u8)
+                    && Value(ref reader) is { Length: > 0 } number
+                    && !numbers.Contains(number, StringComparer.Ordinal))
+                {
+                    // A delivery naming this many numbers is not one Meta sent. Refusing to
+                    // grow the list keeps a crafted body from costing more than it should.
+                    if (numbers.Count == MaxOrigins)
+                    {
+                        return [];
+                    }
+
+                    numbers.Add(number);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON, or truncated. Nothing to route by; the caller refuses the delivery.
+            return [];
+        }
+
+        return origins;
+    }
+
+    /// <summary>
+    /// A key for the delivery, for recognising one Meta has sent before.
+    /// </summary>
+    /// <param name="json">The raw body, exactly as it arrived.</param>
+    /// <returns>The SHA-256 of the body, as lower-case hex.</returns>
+    /// <remarks>
+    /// <para>
+    /// Meta repeats deliveries of its own accord, and repeats any delivery a handler failed
+    /// for up to seven days, so handlers have to be idempotent. The cheapest way to make one
+    /// so is to write this key down under a unique constraint and drop the insert that
+    /// collides: two genuinely different deliveries cannot produce the same digest, because
+    /// the body carries the message id and the timestamp.
+    /// </para>
+    /// <para>
+    /// Taken over the bytes as they arrived, so it has to be computed before anything
+    /// re-serializes them: a reordered or reindented body is a different key.
+    /// </para>
+    /// </remarks>
+    public static string DeliveryKey(ReadOnlySpan<byte> json)
+    {
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(json, digest);
+
+        // Lower case because that is what every digest in the ecosystem is written in,
+        // Meta's own signature header included, so a key is comparable to one written by
+        // hand. ToHexStringLower is .NET 9; this targets net8.0.
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+
+    /// <inheritdoc cref="DeliveryKey(ReadOnlySpan{byte})" />
+    public static string DeliveryKey(string json) =>
+        DeliveryKey(System.Text.Encoding.UTF8.GetBytes(json));
+
+    /// <summary>Records what one entry named, however its properties were ordered.</summary>
+    private static void Flush(
+        List<WhatsAppWebhookOrigin> origins,
+        string businessAccountId,
+        List<string> numbers)
+    {
+        if (numbers.Count == 0)
+        {
+            // An account-level delivery — a template verdict, an account update — names no
+            // number at all, only the account it belongs to.
+            origins.Add(new WhatsAppWebhookOrigin(null, businessAccountId));
+            return;
+        }
+
+        foreach (var number in numbers)
+        {
+            origins.Add(new WhatsAppWebhookOrigin(number, businessAccountId));
+        }
+    }
+
+    /// <summary>
+    /// Reads the string value of the property the reader is on, or nothing when it is longer
+    /// than any identifier Meta issues.
+    /// </summary>
+    private static string? Value(ref Utf8JsonReader reader)
+    {
+        if (!reader.Read() || reader.TokenType != JsonTokenType.String)
+        {
+            return null;
+        }
+
+        // Measured before it is materialized, so an oversized one is never allocated. This is
+        // the escaped length, which is never shorter than the string it decodes to.
+        var length = reader.HasValueSequence ? reader.ValueSequence.Length : reader.ValueSpan.Length;
+
+        return length <= MaxIdLength ? reader.GetString() : null;
+    }
 
     private static void Collect(
         string? field,
@@ -494,17 +688,18 @@ public static class WhatsAppWebhookParser
             ProfileNameOf(value, message.From),
             message.Context?.Id,
             message.Context?.Forwarded == true || message.Context?.FrequentlyForwarded == true,
+            message.Context?.FrequentlyForwarded == true,
             ToReferral(message.Referral),
             ToReferredProduct(message.Context?.ReferredProduct));
 
         return message.Type switch
         {
             "text" when message.Text?.Body is { } body => New<TextMessage>(common) with { Text = body },
-            "image" => Media(common, message.Image, IncomingMediaKind.Image),
-            "audio" => Media(common, message.Audio, IncomingMediaKind.Audio),
-            "video" => Media(common, message.Video, IncomingMediaKind.Video),
-            "document" => Media(common, message.Document, IncomingMediaKind.Document),
-            "sticker" => Media(common, message.Sticker, IncomingMediaKind.Sticker),
+            "image" => Media(common, message.Image, IncomingMediaKind.Image, message.Errors),
+            "audio" => Media(common, message.Audio, IncomingMediaKind.Audio, message.Errors),
+            "video" => Media(common, message.Video, IncomingMediaKind.Video, message.Errors),
+            "document" => Media(common, message.Document, IncomingMediaKind.Document, message.Errors),
+            "sticker" => Media(common, message.Sticker, IncomingMediaKind.Sticker, message.Errors),
             "location" when message.Location is { } location => New<LocationMessage>(common) with
             {
                 Location = new Location
@@ -555,9 +750,16 @@ public static class WhatsAppWebhookParser
         };
     }
 
-    private static WhatsAppEvent Media(MessageFields common, WebhookMedia? media, IncomingMediaKind kind) =>
+    private static WhatsAppEvent Media(
+        MessageFields common,
+        WebhookMedia? media,
+        IncomingMediaKind kind,
+        List<GraphError>? errors) =>
         media?.Id is not { } id
-            ? Unsupported(common, kind.ToString().ToLowerInvariant(), errors: null)
+            // No id is exactly the case Meta attaches an explanation to — 131052, "Media
+            // download error". Dropping it leaves a handler with an unsupported message and
+            // not a word about why.
+            ? Unsupported(common, kind.ToString().ToLowerInvariant(), errors)
             : New<MediaMessage>(common) with
             {
                 Kind = kind,
@@ -674,6 +876,7 @@ public static class WhatsAppWebhookParser
             ProfileName = common.ProfileName,
             ReplyToMessageId = common.ReplyTo,
             IsForwarded = common.Forwarded,
+            IsFrequentlyForwarded = common.FrequentlyForwarded,
             Referral = common.Referral,
             ReferredProduct = common.ReferredProduct,
         };
@@ -779,6 +982,7 @@ public static class WhatsAppWebhookParser
         string? ProfileName,
         string? ReplyTo,
         bool Forwarded,
+        bool FrequentlyForwarded,
         MessageReferral? Referral,
         ReferredProduct? ReferredProduct);
 }

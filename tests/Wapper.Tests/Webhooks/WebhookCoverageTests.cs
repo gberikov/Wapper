@@ -264,6 +264,62 @@ public class WebhookCoverageTests
     }
 
     [Fact]
+    public void Media_that_could_not_be_fetched_arrives_with_the_reason_attached()
+    {
+        // Meta sends the media object with no id and the explanation beside it, which is the
+        // one case where an unsupported message has something useful to say. Dropping it
+        // leaves a handler holding an image it cannot download and no idea why.
+        const string Body = """
+            {"object":"whatsapp_business_account","entry":[{"id":"W","changes":[{"field":"messages",
+             "value":{"messaging_product":"whatsapp",
+              "metadata":{"phone_number_id":"106540352242922"},
+              "messages":[{"from":"79000000001","id":"wamid.A","timestamp":"1755000000",
+                           "type":"image","image":{"mime_type":"image/jpeg"},
+                           "errors":[{"code":131052,"title":"Media download error",
+                                      "error_data":{"details":"Unable to download media"}}]}]}}]}]}
+            """;
+
+        var message = Assert.IsType<UnsupportedMessage>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
+
+        Assert.Equal("image", message.Type);
+
+        var error = message.Error!;
+        Assert.Equal(131052, error.Code);
+        Assert.Equal("Media download error", error.Title);
+        Assert.Equal("Unable to download media", error.Details);
+    }
+
+    [Fact]
+    public void A_message_forwarded_many_times_over_is_told_apart_from_an_ordinary_forward()
+    {
+        // Meta reports the two separately on purpose: `frequently_forwarded` means a message
+        // that has travelled more than five hops down a chain, which is what a hoax or a
+        // viral scam looks like. Anything that triages incoming wants to branch on it.
+        const string Body = """
+            {"object":"whatsapp_business_account","entry":[{"id":"W","changes":[{"field":"messages",
+             "value":{"messaging_product":"whatsapp",
+              "metadata":{"phone_number_id":"106540352242922"},
+              "messages":[{"from":"79000000001","id":"wamid.A","timestamp":"1755000000",
+                           "type":"text","text":{"body":"pass this on"},
+                           "context":{"forwarded":true,"frequently_forwarded":true}},
+                          {"from":"79000000002","id":"wamid.B","timestamp":"1755000001",
+                           "type":"text","text":{"body":"look at this"},
+                           "context":{"forwarded":true}}]}}]}]}
+            """;
+
+        var events = WhatsAppWebhookParser.Parse(Body);
+
+        var chain = Assert.IsType<TextMessage>(events[0]);
+        Assert.True(chain.IsForwarded);
+        Assert.True(chain.IsFrequentlyForwarded);
+
+        // An ordinary forward is still a forward, and only that.
+        var once = Assert.IsType<TextMessage>(events[1]);
+        Assert.True(once.IsForwarded);
+        Assert.False(once.IsFrequentlyForwarded);
+    }
+
+    [Fact]
     public void A_conversation_expiry_that_cannot_be_read_is_absent_rather_than_year_one()
     {
         const string Body = """

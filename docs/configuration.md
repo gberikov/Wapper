@@ -97,10 +97,12 @@ Three things worth knowing about the multi-tenant shape:
   is what the webhook endpoint reads `AppSecret` and `WebhookVerifyToken` from. Leaving it
   without an access token is deliberate: a forgotten `For(...)` then fails saying so, rather
   than sending as whichever tenant happened to be first.
-- **One webhook endpoint per Meta app, not per number.** Numbers on one app share an app
-  secret, so `app.MapWhatsAppWebhook("/whatsapp")` is enough and each event carries its own
-  `PhoneNumberId`. Separate apps mean separate secrets, so put them in each tenant's section
-  and map one endpoint each: `app.MapWhatsAppWebhook("/whatsapp/acme", "acme")`.
+- **One webhook endpoint is enough, whatever the apps.** Numbers on one Meta app share an app
+  secret, so `app.MapWhatsAppWebhook("/whatsapp")` serves all of them and each event carries
+  its own `PhoneNumberId`. Tenants on *separate* apps have separate secrets: give each its own
+  `AppSecret` and map `app.MapWhatsAppWebhookForTenants("/whatsapp")`, which works out from
+  each delivery whose secret to check it against — see
+  [Receiving messages](webhooks.md#one-endpoint-for-every-tenant).
 - **Credentials are not required in configuration.** A tenant listed here without an access
   token is legal, because a SaaS supplies tokens from its own store; it fails on its first
   call, naming itself. If that is your case, see [below](#credentials-from-somewhere-other-than-configuration).
