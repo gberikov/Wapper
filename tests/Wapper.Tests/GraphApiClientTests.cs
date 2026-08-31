@@ -142,6 +142,21 @@ public class GraphApiClientTests
     }
 
     [Theory]
+    // Climbing out from under the API version addresses something other than the endpoint
+    // that was named. `..` folds whether it is escaped or not, so this is the only place to
+    // catch an id that reached the path without being checked.
+    [InlineData("../../oauth/access_token")]
+    [InlineData("..")]
+    [InlineData("%2e%2e/%2e%2e/oauth")]
+    public void A_path_that_leaves_the_api_version_behind_is_refused(string path)
+    {
+        var exception = Assert.Throws<WhatsAppException>(() =>
+            GraphApiClient.BuildUri(new WhatsAppOptions(), path));
+
+        Assert.Contains("v26.0", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     // A base address without a trailing slash would otherwise lose its last segment, and a
     // leading slash on the relative part would drop the base path entirely.
     [InlineData("https://graph.facebook.com", "123/messages", "https://graph.facebook.com/v26.0/123/messages")]

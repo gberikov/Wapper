@@ -62,6 +62,15 @@ internal sealed record GraphRequest
     public GraphCallKind Kind { get; init; } = GraphCallKind.Other;
 
     /// <summary>
+    /// A stable, low-cardinality name for what this call does, such as <c>messages.send</c>.
+    /// </summary>
+    /// <remarks>
+    /// Names the span when tracing is switched on. It has to stay low-cardinality — never an
+    /// id — or the traces cannot be aggregated, which is the only reason to collect them.
+    /// </remarks>
+    public string? Operation { get; init; }
+
+    /// <summary>
     /// The recipient, for a message. Needed for the pair allowance, which is counted per
     /// conversation rather than per phone number.
     /// </summary>

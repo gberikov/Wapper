@@ -42,6 +42,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                         Path = $"{accountId}/phone_numbers?fields={Fields}" +
                                (after is null ? string.Empty : $"&after={Uri.EscapeDataString(after)}"),
                         Kind = GraphCallKind.Management,
+                        Operation = "phone_numbers.list",
                     },
                     WhatsAppJsonContext.Default.PhoneNumberListResponse,
                     cancellationToken)
@@ -72,6 +73,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Get,
                     Path = $"{Target(phoneNumberId, credentials)}?fields={Fields}",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.get",
                 },
                 WhatsAppJsonContext.Default.PhoneNumberPayload,
                 cancellationToken)
@@ -99,6 +101,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Post,
                     Path = Target(phoneNumberId, credentials),
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.set_pin",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TwoStepPinPayload),
@@ -131,6 +134,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                            $"?code_method={ToWire(method)}" +
                            $"&language={Uri.EscapeDataString(language)}",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.request_code",
                     // A retry sends a second code and invalidates the first, which strands
                     // whoever is looking at the message that already arrived.
                     Retryable = false,
@@ -159,6 +163,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Path = $"{Target(phoneNumberId, credentials)}/verify_code" +
                            $"?code={Uri.EscapeDataString(digits)}",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.verify",
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
@@ -189,6 +194,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Post,
                     Path = $"{Target(phoneNumberId, credentials)}/register",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.register",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.RegisterPayload),
@@ -216,6 +222,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Post,
                     Path = $"{Target(phoneNumberId, credentials)}/deregister",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.deregister",
                     // Shares the ten-per-72-hours allowance with registration.
                     Retryable = false,
                 },
@@ -239,6 +246,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Get,
                     Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_encryption",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.get_encryption_key",
                 },
                 WhatsAppJsonContext.Default.BusinessEncryptionResponse,
                 cancellationToken)
@@ -273,6 +281,7 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Method = HttpMethod.Post,
                     Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_encryption",
                     Kind = GraphCallKind.Management,
+                    Operation = "phone_numbers.set_encryption_key",
                     // Form data rather than JSON, which is how Meta documents this one — and
                     // the key is PEM, so its newlines have to survive the encoding.
                     Content = GraphContent.Form(("business_public_key", publicKey)),

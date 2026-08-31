@@ -36,6 +36,7 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
                     Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_profile" +
                            $"?fields={Fields}",
                     Kind = GraphCallKind.Management,
+                    Operation = "business_profile.get",
                 },
                 WhatsAppJsonContext.Default.BusinessProfileResponse,
                 cancellationToken)
@@ -78,6 +79,7 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
                     Method = HttpMethod.Post,
                     Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_profile",
                     Kind = GraphCallKind.Management,
+                    Operation = "business_profile.update",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.BusinessProfilePayload),
@@ -100,7 +102,15 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
             .ConfigureAwait(false);
 
         var handle = await ResumableUpload
-            .UploadAsync(client, tenant, credentials, picture, mimeType, "profile", cancellationToken)
+            .UploadAsync(
+                client,
+                tenant,
+                credentials,
+                picture,
+                mimeType,
+                "profile",
+                "business_profile.upload_picture",
+                cancellationToken)
             .ConfigureAwait(false);
 
         await UpdateAsync(

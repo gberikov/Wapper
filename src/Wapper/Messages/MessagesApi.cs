@@ -299,6 +299,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/messages",
                     Kind = GraphCallKind.Message,
+                    Operation = "messages.mark_read",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.SendMessagePayload),
@@ -386,6 +387,10 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/messages",
                     Kind = GraphCallKind.Message,
+                    // The message type is in the span name rather than a tag: there are a
+                    // dozen of them, so it stays aggregatable, and "template sends are slow"
+                    // is exactly the question a trace is opened to answer.
+                    Operation = $"messages.send_{payload.Type}",
                     // Named so the pair allowance is counted per conversation. Without it the
                     // client would pace the phone number and walk straight into 131056.
                     Recipient = to,

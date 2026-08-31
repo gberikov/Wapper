@@ -23,7 +23,7 @@ internal static class ResumableUpload
     /// <summary>Puts a file through the resumable upload and returns the handle it becomes.</summary>
     /// <remarks>
     /// The file name is a label for the session. Meta records it and shows it nowhere, so it
-    /// only has to be something.
+    /// only has to be something. The operation names the two spans this produces.
     /// </remarks>
     public static async Task<string> UploadAsync(
         GraphApiClient client,
@@ -32,6 +32,7 @@ internal static class ResumableUpload
         Stream content,
         string mimeType,
         string fileName,
+        string operation,
         CancellationToken cancellationToken)
     {
         var appId = GraphApiClient.RequireApp(credentials);
@@ -53,6 +54,7 @@ internal static class ResumableUpload
                     Path = $"{appId}/uploads?file_name={Uri.EscapeDataString(fileName)}" +
                            $"&file_length={bytes.Length}" +
                            $"&file_type={Uri.EscapeDataString(mimeType)}",
+                    Operation = operation,
                 },
                 WhatsAppJsonContext.Default.UploadSessionResponse,
                 cancellationToken)
@@ -71,6 +73,7 @@ internal static class ResumableUpload
                     // Already carries its own "upload:" prefix, and came from Meta rather than
                     // from a caller, so it goes into the path as it is.
                     Path = sessionId,
+                    Operation = operation,
                     Content = () =>
                     {
                         var body = new ByteArrayContent(bytes);

@@ -40,6 +40,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                         Method = HttpMethod.Get,
                         Path = $"{accountId}/message_templates{BuildQuery(query, after)}",
                         Kind = GraphCallKind.Management,
+                        Operation = "templates.list",
                     },
                     WhatsAppJsonContext.Default.TemplateListResponse,
                     cancellationToken)
@@ -71,6 +72,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Get,
                     Path = $"{id}?fields={Fields}",
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.get",
                 },
                 WhatsAppJsonContext.Default.TemplateDefinitionPayload,
                 cancellationToken)
@@ -99,6 +101,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = $"{accountId}/message_templates",
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.create",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
@@ -148,6 +151,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = id,
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.update",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
@@ -175,6 +179,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = id,
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.update_category",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
@@ -195,7 +200,15 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         return await ResumableUpload
-            .UploadAsync(client, tenant, credentials, content, mimeType, "sample", cancellationToken)
+            .UploadAsync(
+                client,
+                tenant,
+                credentials,
+                content,
+                mimeType,
+                "sample",
+                "templates.upload_sample",
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -261,6 +274,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Delete,
                     Path = $"{accountId}/message_templates?{query}",
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.delete",
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)

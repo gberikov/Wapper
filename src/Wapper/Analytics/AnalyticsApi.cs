@@ -54,6 +54,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
         var response = await ReadAsync(
                 "analytics",
                 filters.ToString(),
+                "analytics.messaging",
                 WhatsAppJsonContext.Default.MessagingAnalyticsResponse,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -95,6 +96,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
         var response = await ReadAsync(
                 "conversation_analytics",
                 filters.ToString(),
+                "analytics.conversations",
                 WhatsAppJsonContext.Default.ConversationAnalyticsResponse,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -154,6 +156,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
         var response = await ReadAsync(
                 "pricing_analytics",
                 filters.ToString(),
+                "analytics.pricing",
                 WhatsAppJsonContext.Default.PricingAnalyticsResponse,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -256,6 +259,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
                     Method = HttpMethod.Get,
                     Path = $"{accountId}/template_analytics?{parameters}",
                     Kind = GraphCallKind.Management,
+                    Operation = "analytics.templates",
                 },
                 WhatsAppJsonContext.Default.TemplateAnalyticsResponse,
                 cancellationToken)
@@ -294,6 +298,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
     private async Task<TResponse> ReadAsync<TResponse>(
         string field,
         string filters,
+        string operation,
         JsonTypeInfo<TResponse> typeInfo,
         CancellationToken cancellationToken)
     {
@@ -310,6 +315,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
                     // Not an endpoint: the account node, read with one field expanded.
                     Path = $"{accountId}?fields={field}{filters}",
                     Kind = GraphCallKind.Management,
+                    Operation = operation,
                 },
                 typeInfo,
                 cancellationToken)

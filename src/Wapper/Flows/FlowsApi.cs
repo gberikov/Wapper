@@ -52,6 +52,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                         Path = $"{accountId}/flows" +
                                (after is null ? string.Empty : $"?after={Uri.EscapeDataString(after)}"),
                         Kind = GraphCallKind.Management,
+                        Operation = "flows.list",
                     },
                     WhatsAppJsonContext.Default.FlowListResponse,
                     cancellationToken)
@@ -94,6 +95,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Get,
                     Path = $"{id}?fields={fields}",
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.get",
                 },
                 WhatsAppJsonContext.Default.FlowPayload,
                 cancellationToken)
@@ -146,6 +148,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Post,
                     Path = $"{accountId}/flows",
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.create",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.FlowDefinitionPayload),
@@ -201,6 +204,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Post,
                     Path = id,
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.update",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.FlowDefinitionPayload),
@@ -235,6 +239,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Post,
                     Path = $"{id}/assets",
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.update_json",
                     // Form data, not a JSON body, for this one endpoint.
                     Content = () =>
                     {
@@ -279,10 +284,10 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
     }
 
     public Task PublishAsync(string flowId, CancellationToken cancellationToken = default) =>
-        PostAsync(flowId, "publish", cancellationToken);
+        PostAsync(flowId, "publish", "flows.publish", cancellationToken);
 
     public Task DeprecateAsync(string flowId, CancellationToken cancellationToken = default) =>
-        PostAsync(flowId, "deprecate", cancellationToken);
+        PostAsync(flowId, "deprecate", "flows.deprecate", cancellationToken);
 
     public async Task DeleteAsync(string flowId, CancellationToken cancellationToken = default)
     {
@@ -299,6 +304,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Delete,
                     Path = id,
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.delete",
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
@@ -325,6 +331,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     // and mints another.
                     Path = $"{id}?fields=preview.invalidate({(invalidate ? "true" : "false")})",
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.get_preview",
                 },
                 WhatsAppJsonContext.Default.FlowPreviewResponse,
                 cancellationToken)
@@ -351,6 +358,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Get,
                     Path = $"{id}/assets",
                     Kind = GraphCallKind.Management,
+                    Operation = "flows.list_assets",
                 },
                 WhatsAppJsonContext.Default.FlowAssetListResponse,
                 cancellationToken)
@@ -364,7 +372,11 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
         })];
     }
 
-    private async Task PostAsync(string flowId, string edge, CancellationToken cancellationToken)
+    private async Task PostAsync(
+        string flowId,
+        string edge,
+        string operation,
+        CancellationToken cancellationToken)
     {
         var id = GraphApiClient.PathSegment(flowId);
 
@@ -379,6 +391,7 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Method = HttpMethod.Post,
                     Path = $"{id}/{edge}",
                     Kind = GraphCallKind.Management,
+                    Operation = operation,
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)

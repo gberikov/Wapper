@@ -33,6 +33,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Credentials = credentials,
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/media",
+                    Operation = "media.upload",
                     Retryable = rewindable,
                     Content = () => BuildUpload(content, mimeType, fileName, rewindable, origin),
                 },
@@ -63,6 +64,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     // Scoping the lookup to the phone number is what stops one tenant reading
                     // another tenant's media on a shared business account.
                     Path = $"{id}?phone_number_id={Uri.EscapeDataString(credentials.PhoneNumberId)}",
+                    Operation = "media.get",
                 },
                 WhatsAppJsonContext.Default.MediaInfoResponse,
                 cancellationToken)
@@ -107,6 +109,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Credentials = credentials,
                     Method = HttpMethod.Get,
                     Path = media.Url.AbsoluteUri,
+                    Operation = "media.download",
                 },
                 media.Url,
                 cancellationToken)
@@ -136,6 +139,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Credentials = credentials,
                     Method = HttpMethod.Delete,
                     Path = $"{id}?phone_number_id={Uri.EscapeDataString(credentials.PhoneNumberId)}",
+                    Operation = "media.delete",
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)

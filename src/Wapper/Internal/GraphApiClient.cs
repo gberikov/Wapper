@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
@@ -36,9 +37,37 @@ internal sealed partial class GraphApiClient(
         credentialsProvider.GetCredentialsAsync(tenant, cancellationToken);
 
     /// <summary>Sends a request, pacing and retrying it, and deserializes the response.</summary>
+    /// <remarks>
+    /// One span covers the whole thing — the waits and the retries included — because that is
+    /// what the caller experiences. The individual attempts show up underneath it when the
+    /// host instruments <c>HttpClient</c> as well.
+    /// </remarks>
     public async Task<TResponse> SendAsync<TResponse>(
         GraphRequest request,
         JsonTypeInfo<TResponse> responseTypeInfo,
+        CancellationToken cancellationToken)
+    {
+        using var activity = WhatsAppDiagnostics.StartCall(request);
+
+        try
+        {
+            var response = await SendWithRetriesAsync(request, responseTypeInfo, activity, cancellationToken)
+                .ConfigureAwait(false);
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            return response;
+        }
+        catch (Exception exception)
+        {
+            WhatsAppDiagnostics.RecordFailure(activity, exception);
+            throw;
+        }
+    }
+
+    private async Task<TResponse> SendWithRetriesAsync<TResponse>(
+        GraphRequest request,
+        JsonTypeInfo<TResponse> responseTypeInfo,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         var tenantOptions = options.Get(request.Tenant);
@@ -100,6 +129,7 @@ internal sealed partial class GraphApiClient(
                 }
 
                 Log.Retrying(_logger, request.Method, request.Path, exception.Code, attempt + 1, backoff.TotalSeconds);
+                WhatsAppDiagnostics.RecordRetry(activity, attempt + 1, exception.Code);
 
                 if (budget is { } spent)
                 {
@@ -144,6 +174,7 @@ internal sealed partial class GraphApiClient(
         Uri absoluteUri,
         CancellationToken cancellationToken)
     {
+        using var activity = WhatsAppDiagnostics.StartCall(request);
         var tenantOptions = options.Get(request.Tenant);
 
         // The URL came back from the Cloud API, but it reaches this method through a public
@@ -170,15 +201,19 @@ internal sealed partial class GraphApiClient(
 
         if (response.IsSuccessStatusCode)
         {
+            activity?.SetStatus(ActivityStatusCode.Ok);
             return response;
         }
 
         try
         {
-            throw new WhatsAppApiException(
+            var failure = new WhatsAppApiException(
                 await ParseErrorAsync(response, linked.Token).ConfigureAwait(false),
                 response.StatusCode,
                 RetryAfterOf(response));
+
+            WhatsAppDiagnostics.RecordFailure(activity, failure);
+            throw failure;
         }
         finally
         {
@@ -249,7 +284,23 @@ internal sealed partial class GraphApiClient(
             ? options.BaseAddress
             : new Uri(options.BaseAddress.AbsoluteUri + "/");
 
-        return new Uri(root, $"{options.GraphApiVersion}/{path.TrimStart('/')}");
+        // Resolved from one string rather than against the versioned root, because a resumable
+        // upload session id begins `upload:` — which Uri reads as a scheme when it is the
+        // whole of the relative part, and as an ordinary segment when it is not.
+        var uri = new Uri(root, $"{options.GraphApiVersion}/{path.TrimStart('/')}");
+        var versioned = new Uri(root, $"{options.GraphApiVersion}/");
+
+        // A path that climbs out from under the API version is either a bug or an id that
+        // was never checked. `..` folds whether it is escaped or not, so comparing the built
+        // address against the root it was meant to sit under is the only way to catch it.
+        if (!versioned.IsBaseOf(uri))
+        {
+            throw new WhatsAppException(
+                $"'{path}' does not stay under {versioned}, so it would address something " +
+                "other than the endpoint it names.");
+        }
+
+        return uri;
     }
 
     /// <summary>
