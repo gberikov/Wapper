@@ -2,6 +2,9 @@
 
   <PropertyGroup>
     <Description>A modern .NET client for the WhatsApp Cloud API, with built-in rate limiting, retries and multi-tenant credentials.</Description>
+    <!-- Replaces reflection-based configuration binding with generated code, so the
+         IConfiguration overloads of AddWhatsApp stay usable under trimming and AOT. -->
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
   </PropertyGroup>
 
   <ItemGroup>
@@ -9,9 +12,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Wapper.Tests" />
+    <!-- The Redis limiter falls back to the in-process one when Redis cannot be reached. -->
+    <InternalsVisibleTo Include="Wapper.RateLimiting.Redis" />
+    <InternalsVisibleTo Include="Wapper.RateLimiting.Redis.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
-    <PackageReference Include="System.Threading.RateLimiting" />
   </ItemGroup>
 
 </Project>
