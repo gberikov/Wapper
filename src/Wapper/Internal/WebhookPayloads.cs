@@ -49,6 +49,43 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("errors")]
     public List<GraphError>? Errors { get; set; }
+
+    // Template events. These arrive on their own `field` values and carry no metadata at
+    // all, so they identify themselves by the WhatsApp Business Account on the entry.
+
+    [JsonPropertyName("event")]
+    public string? Event { get; set; }
+
+    /// <summary>Sent as a number, not a string, unlike every other id in the payload.</summary>
+    [JsonPropertyName("message_template_id")]
+    public long? MessageTemplateId { get; set; }
+
+    [JsonPropertyName("message_template_name")]
+    public string? MessageTemplateName { get; set; }
+
+    [JsonPropertyName("message_template_language")]
+    public string? MessageTemplateLanguage { get; set; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("other_info")]
+    public WebhookOtherInfo? OtherInfo { get; set; }
+
+    [JsonPropertyName("previous_quality_score")]
+    public string? PreviousQualityScore { get; set; }
+
+    [JsonPropertyName("new_quality_score")]
+    public string? NewQualityScore { get; set; }
+}
+
+internal sealed class WebhookOtherInfo
+{
+    [JsonPropertyName("title")]
+    public string? Title { get; set; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
 }
 
 internal sealed class WebhookMetadata

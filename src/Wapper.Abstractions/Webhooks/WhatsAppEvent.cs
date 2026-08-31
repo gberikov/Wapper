@@ -12,12 +12,23 @@ namespace Wapper.Webhooks;
 /// </remarks>
 public abstract record WhatsAppEvent
 {
-    /// <summary>The business phone number the event arrived on.</summary>
+    /// <summary>
+    /// The business phone number the event arrived on.
+    /// </summary>
     /// <remarks>
-    /// The only thing in the payload that identifies the account, so this is what a
-    /// multi-tenant host matches on.
+    /// Empty on events that belong to the account rather than to a number — a template
+    /// moving through review, for instance. Match on
+    /// <see cref="BusinessAccountId"/> for those.
     /// </remarks>
     public string PhoneNumberId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The WhatsApp Business Account the event belongs to.
+    /// </summary>
+    /// <remarks>
+    /// Present on every delivery, and the only identifier account-level events carry.
+    /// </remarks>
+    public string BusinessAccountId { get; init; } = string.Empty;
 
     /// <summary>The business number in display form, as customers see it.</summary>
     public string? DisplayPhoneNumber { get; init; }
