@@ -62,8 +62,18 @@ internal sealed class GraphApiClient(
                     throw;
                 }
 
-                if (attempt >= limits.MaxRetries)
+                if (attempt >= limits.MaxRetries || !request.Retryable)
                 {
+                    // Even without a retry, holding the budget back is worth doing: the
+                    // rejection says the allowance is spent, and the next call would only
+                    // find out the same way.
+                    if (budget is { } spentOnce)
+                    {
+                        await rateLimiter
+                            .PenaliseAsync(FindScope(budgets, spentOnce), backoff, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
                     throw budget is { } exhausted
                         ? new WhatsAppRateLimitedException(
                             FindScope(budgets, exhausted),
@@ -87,6 +97,52 @@ internal sealed class GraphApiClient(
                     await Task.Delay(backoff, time, cancellationToken).ConfigureAwait(false);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Fetches an absolute URL that is not part of the Graph API surface, presenting the
+    /// tenant's token.
+    /// </summary>
+    /// <remarks>
+    /// Media downloads land on a host of Meta's choosing rather than on graph.facebook.com,
+    /// and the URL still needs the bearer token: fetching it without one returns 404. The
+    /// response is handed back undisposed, because the caller streams the body out of it.
+    /// </remarks>
+    public async Task<HttpResponseMessage> FetchAsync(
+        GraphRequest request,
+        Uri absoluteUri,
+        CancellationToken cancellationToken)
+    {
+        var tenantOptions = options.Get(request.Tenant);
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Get, absoluteUri);
+        httpRequest.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", request.Credentials.AccessToken);
+
+        using var timeout = new CancellationTokenSource(tenantOptions.Timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeout.Token);
+
+        var response = await httpClient
+            .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, linked.Token)
+            .ConfigureAwait(false);
+
+        if (response.IsSuccessStatusCode)
+        {
+            return response;
+        }
+
+        try
+        {
+            throw new WhatsAppApiException(
+                await ParseErrorAsync(response, linked.Token).ConfigureAwait(false),
+                response.StatusCode);
+        }
+        finally
+        {
+            response.Dispose();
         }
     }
 

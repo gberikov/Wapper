@@ -91,6 +91,12 @@ public static class WhatsAppServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
 
+        services.TryAddSingleton<IWhatsAppClient, WhatsAppClient>();
+
+        // Resolvable on their own, for code that only ever touches one resource group and
+        // should not have to know the facade exists.
+        services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Media);
+
         return services
             .AddHttpClient<GraphApiClient>(HttpClientName)
             // Every tenant sets its own timeout, enforced per call. A timeout on the shared
