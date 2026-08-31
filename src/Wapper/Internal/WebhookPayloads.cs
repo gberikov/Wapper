@@ -105,6 +105,41 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("rejection_reason")]
     public string? RejectionReason { get; set; }
+
+    // Flow events. Account-level too, and sharing the `event` and `message` fields above.
+
+    [JsonPropertyName("flow_id")]
+    public string? FlowId { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("old_status")]
+    public string? OldStatus { get; set; }
+
+    [JsonPropertyName("new_status")]
+    public string? NewStatus { get; set; }
+
+    [JsonPropertyName("alert_state")]
+    public string? AlertState { get; set; }
+
+    [JsonPropertyName("threshold")]
+    public double? Threshold { get; set; }
+
+    [JsonPropertyName("requests_count")]
+    public int? RequestsCount { get; set; }
+
+    [JsonPropertyName("error_rate")]
+    public double? ErrorRate { get; set; }
+
+    [JsonPropertyName("p50_latency")]
+    public int? P50Latency { get; set; }
+
+    [JsonPropertyName("p90_latency")]
+    public int? P90Latency { get; set; }
+
+    // A Flow alert's own `errors` array lands in Errors above. It shares the field name with
+    // the message-level errors and nothing else, which is why GraphError carries both shapes.
 }
 
 internal sealed class WebhookOtherInfo

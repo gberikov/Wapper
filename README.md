@@ -273,6 +273,65 @@ Reading is the usual story: Graph answers a bare read with the messaging product
 else, so Wapper always names the fields. The profile comes back wrapped in a one-element array
 even though a number has exactly one, and an empty array means nobody has filled it in.
 
+## Flows
+
+A Flow is a form the customer fills in inside WhatsApp. Its life runs one way — draft,
+published, deprecated — and only a draft can be deleted:
+
+```csharp
+var created = await whatsApp.Flows.CreateAsync(
+    new FlowDefinition
+    {
+        Name = "Book a table",
+        Categories = [FlowCategory.AppointmentBooking],
+        Json = flowJson,
+    },
+    ct);
+
+if (created.ValidationErrors.Count > 0)
+{
+    // The Flow exists. It will simply never publish.
+}
+```
+
+**Read `ValidationErrors`.** A create or a JSON upload that Meta cannot make sense of still
+answers `200` with `"success": true` and a new id; the reasons it will never publish are in
+that list. Code that only watches for exceptions will believe a broken Flow is fine until
+publishing fails.
+
+`ValidationErrors` covers the Flow JSON. Everything else — an endpoint that is not set, a Meta
+app that is not connected, a WABA that is not in good standing — is in `Health`, which
+`GetAsync` fetches and `ListAsync` deliberately does not:
+
+```csharp
+var flow = await whatsApp.Flows.GetAsync(created.Id, cancellationToken: ct);
+
+foreach (var entity in flow.Health!.Entities.Where(e => e.CanSendMessage != MessagingAvailability.Available))
+{
+    logger.LogWarning("{Entity}: {Errors}", entity.EntityType, entity.Errors);
+}
+```
+
+The Flow JSON goes up on its own, as multipart form data rather than as a body:
+
+```csharp
+var errors = await whatsApp.Flows.UpdateJsonAsync(created.Id, flowJson, ct);
+await whatsApp.Flows.PublishAsync(created.Id, ct);
+```
+
+Editing a published Flow drops it back to draft until it is published again. A published Flow
+cannot be deleted — `DeprecateAsync` is how it is retired, and there is no way back from that.
+
+Status changes arrive on the webhook, and so do the monitoring alerts that precede them:
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<FlowWatcher, FlowStatusChanged>();
+builder.Services.AddWhatsAppWebhookHandler<FlowWatcher, FlowAlert>();
+```
+
+An unhealthy endpoint gets the Flow throttled to ten sends an hour, and then blocked. The
+`FlowAlert` is the warning; the `FlowStatusChanged` is what happened anyway.
+
 ## Running in more than one instance
 
 Meta counts per phone number on its side. Three replicas each pacing themselves against the

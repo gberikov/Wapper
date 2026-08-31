@@ -33,6 +33,19 @@ internal sealed class GraphError
 
     [JsonPropertyName("error_data")]
     public GraphErrorData? ErrorData { get; set; }
+
+    // The `errors` array of a Flow alert reuses this field name for a different shape: no
+    // code, no message, and a count and a rate instead. Both forms are read here rather than
+    // being told apart by which webhook they arrived on.
+
+    [JsonPropertyName("error_type")]
+    public string? ErrorType { get; set; }
+
+    [JsonPropertyName("error_count")]
+    public int? ErrorCount { get; set; }
+
+    [JsonPropertyName("error_rate")]
+    public double? ErrorRate { get; set; }
 }
 
 /// <summary>Wire shape of <c>error.error_data</c>.</summary>

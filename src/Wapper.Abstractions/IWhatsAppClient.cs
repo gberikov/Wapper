@@ -1,4 +1,5 @@
 using Wapper.BusinessProfiles;
+using Wapper.Flows;
 using Wapper.Media;
 using Wapper.Messages;
 using Wapper.PhoneNumbers;
@@ -26,6 +27,9 @@ public interface IWhatsAppTenantClient
 
     /// <summary>Reading and editing the profile shown behind the phone number.</summary>
     IBusinessProfileApi BusinessProfile { get; }
+
+    /// <summary>Building, publishing and retiring Flows.</summary>
+    IFlowsApi Flows { get; }
 }
 
 /// <summary>
