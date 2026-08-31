@@ -185,6 +185,24 @@ public enum PhoneNumberAccountMode
     Sandbox,
 }
 
+/// <summary>
+/// The public key Meta encrypts a Flow endpoint's traffic with.
+/// </summary>
+/// <remarks>
+/// Only Flows with an endpoint need one, and they will not run without it.
+/// </remarks>
+public sealed record BusinessEncryptionKey
+{
+    /// <summary>The key, in PEM form.</summary>
+    public string? PublicKey { get; init; }
+
+    /// <summary>
+    /// Whether Meta could verify it: <c>VALID</c>, or <c>MISMATCH</c> when the key does not
+    /// match the signature it was uploaded with.
+    /// </summary>
+    public string? SignatureStatus { get; init; }
+}
+
 /// <summary>A business phone number on a WhatsApp Business Account.</summary>
 /// <remarks>
 /// Meta only returns a handful of these fields by default; the client asks for the rest

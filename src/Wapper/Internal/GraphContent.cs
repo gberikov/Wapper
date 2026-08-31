@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
@@ -25,6 +26,27 @@ internal static class GraphContent
             Headers =
             {
                 ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" },
+            },
+        };
+    }
+
+    /// <summary>
+    /// A form-encoded body, for the handful of endpoints that take one instead of JSON.
+    /// </summary>
+    public static Func<HttpContent> Form(params (string Name, string Value)[] fields)
+    {
+        var encoded = string.Join(
+            '&',
+            fields.Select(field =>
+                $"{Uri.EscapeDataString(field.Name)}={Uri.EscapeDataString(field.Value)}"));
+
+        var bytes = Encoding.UTF8.GetBytes(encoded);
+
+        return () => new ByteArrayContent(bytes)
+        {
+            Headers =
+            {
+                ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded"),
             },
         };
     }

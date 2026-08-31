@@ -224,6 +224,64 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
             .ConfigureAwait(false);
     }
 
+    public async Task<BusinessEncryptionKey?> GetEncryptionKeyAsync(
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
+            .ConfigureAwait(false);
+
+        var response = await client.SendAsync(
+                new GraphRequest
+                {
+                    Tenant = tenant,
+                    Credentials = credentials,
+                    Method = HttpMethod.Get,
+                    Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_encryption",
+                    Kind = GraphCallKind.Management,
+                },
+                WhatsAppJsonContext.Default.BusinessEncryptionResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // Wrapped in a one-element array, like the business profile, and empty when no key
+        // has been uploaded.
+        return response.Data is [var first, ..]
+            ? new BusinessEncryptionKey
+            {
+                PublicKey = first.BusinessPublicKey,
+                SignatureStatus = first.SignatureStatus,
+            }
+            : null;
+    }
+
+    public async Task SetEncryptionKeyAsync(
+        string publicKey,
+        string? phoneNumberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicKey);
+
+        var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
+            .ConfigureAwait(false);
+
+        await client.SendAsync(
+                new GraphRequest
+                {
+                    Tenant = tenant,
+                    Credentials = credentials,
+                    Method = HttpMethod.Post,
+                    Path = $"{Target(phoneNumberId, credentials)}/whatsapp_business_encryption",
+                    Kind = GraphCallKind.Management,
+                    // Form data rather than JSON, which is how Meta documents this one — and
+                    // the key is PEM, so its newlines have to survive the encoding.
+                    Content = GraphContent.Form(("business_public_key", publicKey)),
+                },
+                WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private static string ToWire(VerificationCodeMethod method) => method switch
     {
         VerificationCodeMethod.Sms => "SMS",

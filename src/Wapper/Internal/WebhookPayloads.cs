@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Wapper.Internal;
@@ -26,8 +27,17 @@ internal sealed class WebhookChange
     [JsonPropertyName("field")]
     public string? Field { get; set; }
 
+    /// <summary>
+    /// Left as raw JSON rather than bound to <see cref="WebhookValue"/> here.
+    /// </summary>
+    /// <remarks>
+    /// Two reasons. A field this library has no typed event for still has to be reported with
+    /// the body it arrived in, and there is nothing to bind it to. And the fields that are
+    /// typed are bound one at a time, so a delivery on a field nobody handles costs nothing
+    /// to skip.
+    /// </remarks>
     [JsonPropertyName("value")]
-    public WebhookValue? Value { get; set; }
+    public JsonElement Value { get; set; }
 }
 
 internal sealed class WebhookValue
@@ -229,6 +239,13 @@ internal sealed class WebhookMessage
     [JsonPropertyName("system")]
     public WebhookSystem? System { get; set; }
 
+    [JsonPropertyName("order")]
+    public WebhookOrder? Order { get; set; }
+
+    /// <summary>Where the customer came from, on the first message of a conversation.</summary>
+    [JsonPropertyName("referral")]
+    public WebhookReferral? Referral { get; set; }
+
     [JsonPropertyName("errors")]
     public List<GraphError>? Errors { get; set; }
 }
@@ -246,6 +263,79 @@ internal sealed class WebhookContext
 
     [JsonPropertyName("frequently_forwarded")]
     public bool FrequentlyForwarded { get; set; }
+
+    [JsonPropertyName("referred_product")]
+    public WebhookReferredProduct? ReferredProduct { get; set; }
+}
+
+internal sealed class WebhookReferredProduct
+{
+    [JsonPropertyName("catalog_id")]
+    public string? CatalogId { get; set; }
+
+    [JsonPropertyName("product_retailer_id")]
+    public string? ProductRetailerId { get; set; }
+}
+
+internal sealed class WebhookReferral
+{
+    [JsonPropertyName("source_url")]
+    public string? SourceUrl { get; set; }
+
+    [JsonPropertyName("source_type")]
+    public string? SourceType { get; set; }
+
+    [JsonPropertyName("source_id")]
+    public string? SourceId { get; set; }
+
+    [JsonPropertyName("headline")]
+    public string? Headline { get; set; }
+
+    [JsonPropertyName("body")]
+    public string? Body { get; set; }
+
+    [JsonPropertyName("media_type")]
+    public string? MediaType { get; set; }
+
+    [JsonPropertyName("image_url")]
+    public string? ImageUrl { get; set; }
+
+    [JsonPropertyName("video_url")]
+    public string? VideoUrl { get; set; }
+
+    [JsonPropertyName("thumbnail_url")]
+    public string? ThumbnailUrl { get; set; }
+
+    /// <summary>The click identifier, spelled the way Meta's ad reporting spells it.</summary>
+    [JsonPropertyName("ctwa_clid")]
+    public string? ClickId { get; set; }
+}
+
+internal sealed class WebhookOrder
+{
+    [JsonPropertyName("catalog_id")]
+    public string? CatalogId { get; set; }
+
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
+
+    [JsonPropertyName("product_items")]
+    public List<WebhookOrderItem>? ProductItems { get; set; }
+}
+
+internal sealed class WebhookOrderItem
+{
+    [JsonPropertyName("product_retailer_id")]
+    public string? ProductRetailerId { get; set; }
+
+    [JsonPropertyName("quantity")]
+    public int Quantity { get; set; }
+
+    [JsonPropertyName("item_price")]
+    public decimal ItemPrice { get; set; }
+
+    [JsonPropertyName("currency")]
+    public string? Currency { get; set; }
 }
 
 internal sealed class WebhookText
@@ -288,6 +378,23 @@ internal sealed class WebhookInteractive
 
     [JsonPropertyName("list_reply")]
     public WebhookInteractiveReply? ListReply { get; set; }
+
+    /// <summary>A submitted Flow. Meta's name for it is "native flow message reply".</summary>
+    [JsonPropertyName("nfm_reply")]
+    public WebhookFlowReply? FlowReply { get; set; }
+}
+
+internal sealed class WebhookFlowReply
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("body")]
+    public string? Body { get; set; }
+
+    /// <summary>A string holding JSON, rather than nested JSON.</summary>
+    [JsonPropertyName("response_json")]
+    public string? ResponseJson { get; set; }
 }
 
 internal sealed class WebhookInteractiveReply
@@ -343,6 +450,10 @@ internal sealed class WebhookStatus
     [JsonPropertyName("pricing")]
     public WebhookPricing? Pricing { get; set; }
 
+    /// <summary>Echoed back from the send, untouched.</summary>
+    [JsonPropertyName("biz_opaque_callback_data")]
+    public string? CallbackData { get; set; }
+
     [JsonPropertyName("errors")]
     public List<GraphError>? Errors { get; set; }
 }
@@ -354,6 +465,10 @@ internal sealed class WebhookConversation
 
     [JsonPropertyName("origin")]
     public WebhookConversationOrigin? Origin { get; set; }
+
+    /// <summary>Unix seconds as a string. Only on the status that opens a conversation.</summary>
+    [JsonPropertyName("expiration_timestamp")]
+    public string? ExpirationTimestamp { get; set; }
 }
 
 internal sealed class WebhookConversationOrigin
@@ -369,4 +484,11 @@ internal sealed class WebhookPricing
 
     [JsonPropertyName("category")]
     public string? Category { get; set; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    /// <summary><c>PMP</c> since Meta moved from per-conversation to per-message pricing.</summary>
+    [JsonPropertyName("pricing_model")]
+    public string? PricingModel { get; set; }
 }

@@ -46,10 +46,7 @@ public static class WhatsAppWebhookParser
         {
             foreach (var change in entry.Changes ?? [])
             {
-                if (change.Value is { } value)
-                {
-                    Collect(change.Field, value, entry.Id ?? string.Empty, events);
-                }
+                Collect(change.Field, change.Value, entry.Id ?? string.Empty, events);
             }
         }
 
@@ -62,44 +59,90 @@ public static class WhatsAppWebhookParser
 
     private static void Collect(
         string? field,
-        WebhookValue value,
+        JsonElement value,
         string businessAccountId,
         List<WhatsAppEvent> events)
     {
-        // Template and phone number events belong to the account rather than to a number and
-        // carry no metadata at all, so they are read before a phone number is insisted on.
+        // Template, phone number and Flow events belong to the account rather than to a
+        // number and carry no metadata at all, so they are read before a phone number is
+        // insisted on.
         switch (field)
         {
-            case "message_template_status_update":
-                events.Add(ToStatusChange(value, businessAccountId));
+            case "message_template_status_update" when Bind(value) is { } status:
+                events.Add(ToStatusChange(status, businessAccountId));
                 return;
 
-            case "message_template_quality_update":
-                events.Add(ToQualityChange(value, businessAccountId));
+            case "message_template_quality_update" when Bind(value) is { } quality:
+                events.Add(ToQualityChange(quality, businessAccountId));
                 return;
 
-            case "phone_number_quality_update":
-                events.Add(ToPhoneNumberQualityChange(value, businessAccountId));
+            case "phone_number_quality_update" when Bind(value) is { } numberQuality:
+                events.Add(ToPhoneNumberQualityChange(numberQuality, businessAccountId));
                 return;
 
-            case "phone_number_name_update":
-                events.Add(ToPhoneNumberNameChange(value, businessAccountId));
+            case "phone_number_name_update" when Bind(value) is { } name:
+                events.Add(ToPhoneNumberNameChange(name, businessAccountId));
                 return;
 
             // One field carries both the status changes and the monitoring alerts, told apart
             // by `event`.
-            case "flows":
-                events.Add(value.Event == "FLOW_STATUS_CHANGE"
-                    ? ToFlowStatusChange(value, businessAccountId)
-                    : ToFlowAlert(value, businessAccountId));
+            case "flows" when Bind(value) is { } flow:
+                events.Add(flow.Event == "FLOW_STATUS_CHANGE"
+                    ? ToFlowStatusChange(flow, businessAccountId)
+                    : ToFlowAlert(flow, businessAccountId));
+                return;
+
+            case "messages" when Bind(value) is { } messages:
+                CollectMessages(messages, businessAccountId, events);
                 return;
 
             default:
-                break;
+                // Meta has more than twenty webhook fields and keeps adding to them. Dropping
+                // one leaves no trace of an account being offboarded or a customer opting out
+                // of marketing, so it is reported with the body it arrived in instead.
+                events.Add(new UnknownEvent
+                {
+                    BusinessAccountId = businessAccountId,
+                    Field = field ?? string.Empty,
+                    Json = value.ValueKind == JsonValueKind.Undefined ? string.Empty : value.GetRawText(),
+                });
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Binds the <c>value</c> object of a change this library has an event for.
+    /// </summary>
+    /// <remarks>
+    /// Left as raw JSON until here so that a delivery on a field nobody handles costs one
+    /// string rather than a walk over every property the messages webhook can carry.
+    /// </remarks>
+    private static WebhookValue? Bind(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
         }
 
-        // For everything else the phone number is the only identifier the payload carries,
-        // and without it there is no saying which number an event belongs to.
+        try
+        {
+            return value.Deserialize(WhatsAppJsonContext.Default.WebhookValue);
+        }
+        catch (JsonException)
+        {
+            // A field this library knows, shaped in a way it does not. Better to report
+            // nothing for it than to fail the whole delivery.
+            return null;
+        }
+    }
+
+    private static void CollectMessages(
+        WebhookValue value,
+        string businessAccountId,
+        List<WhatsAppEvent> events)
+    {
+        // The phone number is the only identifier this payload carries, and without it there
+        // is no saying which number an event belongs to.
         var phoneNumberId = value.Metadata?.PhoneNumberId;
         if (string.IsNullOrEmpty(phoneNumberId))
         {
@@ -155,8 +198,8 @@ public static class WhatsAppWebhookParser
         TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
         TemplateName = value.MessageTemplateName ?? string.Empty,
         TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
-        Previous = ParseQuality(value.PreviousQualityScore),
-        Current = ParseQuality(value.NewQualityScore),
+        Previous = TemplateMapping.ParseQuality(value.PreviousQualityScore),
+        Current = TemplateMapping.ParseQuality(value.NewQualityScore),
     };
 
     private static PhoneNumberQualityChanged ToPhoneNumberQualityChange(
@@ -276,15 +319,6 @@ public static class WhatsAppWebhookParser
         _ => TemplateStatusChangeReason.Unknown,
     };
 
-    private static TemplateQuality ParseQuality(string? score) => score?.ToUpperInvariant() switch
-    {
-        "GREEN" or "HIGH" => TemplateQuality.Green,
-        "YELLOW" or "MEDIUM" => TemplateQuality.Yellow,
-        "RED" or "LOW" => TemplateQuality.Red,
-        "UNKNOWN" or "PENDING" => TemplateQuality.Pending,
-        _ => TemplateQuality.Unknown,
-    };
-
     private static WhatsAppEvent? ToEvent(
         WebhookMessage message,
         WebhookValue value,
@@ -306,7 +340,9 @@ public static class WhatsAppWebhookParser
             message.From,
             ProfileNameOf(value, message.From),
             message.Context?.Id,
-            message.Context?.Forwarded == true || message.Context?.FrequentlyForwarded == true);
+            message.Context?.Forwarded == true || message.Context?.FrequentlyForwarded == true,
+            ToReferral(message.Referral),
+            ToReferredProduct(message.Context?.ReferredProduct));
 
         return message.Type switch
         {
@@ -343,31 +379,32 @@ public static class WhatsAppWebhookParser
                 Payload = payload,
                 Text = message.Button.Text,
             },
+            "order" when message.Order is { } order => New<OrderMessage>(common) with
+            {
+                CatalogId = order.CatalogId,
+                Text = order.Text,
+                Products = [.. (order.ProductItems ?? []).Select(item => new OrderProduct
+                {
+                    ProductRetailerId = item.ProductRetailerId,
+                    Quantity = item.Quantity,
+                    ItemPrice = item.ItemPrice,
+                    Currency = item.Currency,
+                })],
+            },
+            "request_welcome" => New<WelcomeRequest>(common),
             "system" => New<SystemMessage>(common) with
             {
                 Body = message.System?.Body,
                 Kind = message.System?.Type,
                 NewWhatsAppId = message.System?.WaId,
             },
-            _ => Unsupported(common, message),
+            _ => Unsupported(common, message.Type, message.Errors),
         };
     }
 
     private static WhatsAppEvent Media(MessageFields common, WebhookMedia? media, IncomingMediaKind kind) =>
         media?.Id is not { } id
-            ? new UnsupportedMessage
-            {
-                PhoneNumberId = common.PhoneNumberId,
-                BusinessAccountId = common.BusinessAccountId,
-                DisplayPhoneNumber = common.Display,
-                Timestamp = common.Timestamp,
-                Id = common.Id,
-                From = common.From,
-                ProfileName = common.ProfileName,
-                ReplyToMessageId = common.ReplyTo,
-                IsForwarded = common.Forwarded,
-                Type = kind.ToString().ToLowerInvariant(),
-            }
+            ? Unsupported(common, kind.ToString().ToLowerInvariant(), errors: null)
             : New<MediaMessage>(common) with
             {
                 Kind = kind,
@@ -385,11 +422,23 @@ public static class WhatsAppWebhookParser
         WebhookInteractive? interactive,
         string? type)
     {
+        // A submitted Flow arrives here rather than as a message type of its own, and carries
+        // the whole form rather than one tapped control.
+        if (interactive?.FlowReply is { } flow)
+        {
+            return New<FlowReply>(common) with
+            {
+                Name = flow.Name,
+                Body = flow.Body,
+                ResponseJson = flow.ResponseJson ?? string.Empty,
+            };
+        }
+
         var reply = interactive?.ButtonReply ?? interactive?.ListReply;
 
         if (reply?.Id is not { } id)
         {
-            return Unsupported(common, type);
+            return Unsupported(common, type, errors: null);
         }
 
         return New<InteractiveReply>(common) with
@@ -436,41 +485,26 @@ public static class WhatsAppWebhookParser
             ConversationId = status.Conversation?.Id,
             ConversationCategory = status.Pricing?.Category ?? status.Conversation?.Origin?.Type,
             Billable = status.Pricing?.Billable,
+            PricingType = status.Pricing?.Type,
+            PricingModel = status.Pricing?.PricingModel,
+            ConversationExpiresAt = status.Conversation?.ExpirationTimestamp is { } expiry
+                ? ToTimestamp(expiry)
+                : null,
+            CallbackData = status.CallbackData,
             Errors = status.Errors is { Count: > 0 } errors
                 ? [.. errors.Select(e => e.ToError())]
                 : [],
         };
     }
 
-    private static UnsupportedMessage Unsupported(MessageFields common, WebhookMessage message) =>
-        new()
+    private static UnsupportedMessage Unsupported(
+        MessageFields common,
+        string? type,
+        List<GraphError>? errors) =>
+        New<UnsupportedMessage>(common) with
         {
-            PhoneNumberId = common.PhoneNumberId,
-            BusinessAccountId = common.BusinessAccountId,
-            DisplayPhoneNumber = common.Display,
-            Timestamp = common.Timestamp,
-            Id = common.Id,
-            From = common.From,
-            ProfileName = common.ProfileName,
-            ReplyToMessageId = common.ReplyTo,
-            IsForwarded = common.Forwarded,
-            Type = message.Type ?? "unknown",
-            Error = message.Errors is { Count: > 0 } errors ? errors[0].ToError() : null,
-        };
-
-    private static UnsupportedMessage Unsupported(MessageFields common, string? type) =>
-        new()
-        {
-            PhoneNumberId = common.PhoneNumberId,
-            BusinessAccountId = common.BusinessAccountId,
-            DisplayPhoneNumber = common.Display,
-            Timestamp = common.Timestamp,
-            Id = common.Id,
-            From = common.From,
-            ProfileName = common.ProfileName,
-            ReplyToMessageId = common.ReplyTo,
-            IsForwarded = common.Forwarded,
             Type = type ?? "unknown",
+            Error = errors is { Count: > 0 } reported ? reported[0].ToError() : null,
         };
 
     private static TMessage New<TMessage>(MessageFields common)
@@ -486,7 +520,29 @@ public static class WhatsAppWebhookParser
             ProfileName = common.ProfileName,
             ReplyToMessageId = common.ReplyTo,
             IsForwarded = common.Forwarded,
+            Referral = common.Referral,
+            ReferredProduct = common.ReferredProduct,
         };
+
+    private static MessageReferral? ToReferral(WebhookReferral? referral) =>
+        referral is null
+            ? null
+            : new MessageReferral
+            {
+                SourceUrl = referral.SourceUrl,
+                SourceType = referral.SourceType,
+                SourceId = referral.SourceId,
+                Headline = referral.Headline,
+                Body = referral.Body,
+                MediaType = referral.MediaType,
+                ImageUrl = referral.ImageUrl,
+                VideoUrl = referral.VideoUrl,
+                ThumbnailUrl = referral.ThumbnailUrl,
+                ClickId = referral.ClickId,
+            };
+
+    private static ReferredProduct? ToReferredProduct(WebhookReferredProduct? product) =>
+        product is null ? null : new ReferredProduct(product.CatalogId, product.ProductRetailerId);
 
     private static string? ProfileNameOf(WebhookValue value, string from)
     {
@@ -565,5 +621,7 @@ public static class WhatsAppWebhookParser
         string From,
         string? ProfileName,
         string? ReplyTo,
-        bool Forwarded);
+        bool Forwarded,
+        MessageReferral? Referral,
+        ReferredProduct? ReferredProduct);
 }

@@ -38,7 +38,16 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
             case InteractiveReply message:
                 await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
                 break;
+            case FlowReply message:
+                await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
+                break;
             case TemplateButtonReply message:
+                await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
+                break;
+            case OrderMessage message:
+                await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
+                break;
+            case WelcomeRequest message:
                 await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
                 break;
             case SystemMessage message:
@@ -70,6 +79,9 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
                 break;
             case FlowAlert alert:
                 await InvokeAsync(services, alert, cancellationToken).ConfigureAwait(false);
+                break;
+            case UnknownEvent unknown:
+                await InvokeAsync(services, unknown, cancellationToken).ConfigureAwait(false);
                 break;
             default:
                 logger.LogWarning(

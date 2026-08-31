@@ -99,6 +99,7 @@ public static class WhatsAppServiceCollectionExtensions
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Media);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Templates);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().PhoneNumbers);
+        services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Account);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().BusinessProfile);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Flows);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Analytics);

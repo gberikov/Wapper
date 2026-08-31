@@ -14,6 +14,9 @@ namespace Wapper.Internal;
 [JsonSerializable(typeof(AppUsage))]
 [JsonSerializable(typeof(SendMessagePayload))]
 [JsonSerializable(typeof(WebhookPayload))]
+// Bound one change at a time rather than reached through WebhookPayload, so a delivery on a
+// field this library has no event for is never walked at all.
+[JsonSerializable(typeof(WebhookValue))]
 [JsonSerializable(typeof(TemplateDefinitionPayload))]
 [JsonSerializable(typeof(TemplateListResponse))]
 [JsonSerializable(typeof(TemplateCreatedResponse))]
@@ -38,6 +41,8 @@ namespace Wapper.Internal;
 [JsonSerializable(typeof(SendMessageResponse))]
 [JsonSerializable(typeof(MediaIdResponse))]
 [JsonSerializable(typeof(MediaInfoResponse))]
+[JsonSerializable(typeof(SubscribedAppListResponse))]
+[JsonSerializable(typeof(BusinessEncryptionResponse))]
 [JsonSerializable(typeof(SuccessResponse))]
 [JsonSerializable(typeof(Dictionary<string, List<BusinessUseCaseUsage>>), TypeInfoPropertyName = "DictionaryStringListBusinessUseCaseUsage")]
 internal sealed partial class WhatsAppJsonContext : JsonSerializerContext;

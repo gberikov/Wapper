@@ -6,11 +6,15 @@ namespace Wapper.Messages;
 /// <summary>Sending messages for one tenant.</summary>
 internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessagesApi
 {
+    /// <summary>Meta's ceiling on the opaque data it hands back on a status.</summary>
+    private const int MaxCallbackDataLength = 512;
+
     public Task<SentMessage> SendTextAsync(
         string to,
         string text,
         bool previewUrl = false,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -18,6 +22,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         return SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "text";
@@ -37,10 +42,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         MediaSource media,
         string? caption = null,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "image";
@@ -53,10 +60,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         MediaSource media,
         string? caption = null,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "video";
@@ -68,10 +77,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         string to,
         MediaSource media,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "audio";
@@ -85,10 +96,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         string? caption = null,
         string? fileName = null,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "document";
@@ -100,10 +113,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         string to,
         MediaSource media,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "sticker";
@@ -115,10 +130,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         string to,
         Location location,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "location";
@@ -130,6 +147,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         string to,
         IEnumerable<Contact> contacts,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(contacts);
@@ -143,6 +161,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         return SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "contacts";
@@ -155,86 +174,64 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         string to,
         string messageId,
         string emoji,
+        string? callbackData = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         ArgumentException.ThrowIfNullOrWhiteSpace(emoji);
 
-        return ReactAsync(to, messageId, emoji, cancellationToken);
+        return ReactAsync(to, messageId, emoji, callbackData, cancellationToken);
     }
 
     public Task<SentMessage> RemoveReactionAsync(
         string to,
         string messageId,
+        string? callbackData = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
 
         // An empty emoji is how a reaction is taken back. There is no separate endpoint.
-        return ReactAsync(to, messageId, string.Empty, cancellationToken);
+        return ReactAsync(to, messageId, string.Empty, callbackData, cancellationToken);
     }
 
     public Task<SentMessage> SendButtonsAsync(
         string to,
         ButtonMessage message,
         string? replyToMessageId = null,
-        CancellationToken cancellationToken = default)
-    {
-        var interactive = message.ToPayload();
-
-        return SendAsync(
-            to,
-            replyToMessageId,
-            payload =>
-            {
-                payload.Type = "interactive";
-                payload.Interactive = interactive;
-            },
-            cancellationToken);
-    }
+        string? callbackData = null,
+        CancellationToken cancellationToken = default) =>
+        SendInteractiveAsync(to, message.ToPayload(), replyToMessageId, callbackData, cancellationToken);
 
     public Task<SentMessage> SendListAsync(
         string to,
         ListMessage message,
         string? replyToMessageId = null,
-        CancellationToken cancellationToken = default)
-    {
-        var interactive = message.ToPayload();
-
-        return SendAsync(
-            to,
-            replyToMessageId,
-            payload =>
-            {
-                payload.Type = "interactive";
-                payload.Interactive = interactive;
-            },
-            cancellationToken);
-    }
+        string? callbackData = null,
+        CancellationToken cancellationToken = default) =>
+        SendInteractiveAsync(to, message.ToPayload(), replyToMessageId, callbackData, cancellationToken);
 
     public Task<SentMessage> SendCallToActionAsync(
         string to,
         CallToActionMessage message,
         string? replyToMessageId = null,
-        CancellationToken cancellationToken = default)
-    {
-        var interactive = message.ToPayload();
+        string? callbackData = null,
+        CancellationToken cancellationToken = default) =>
+        SendInteractiveAsync(to, message.ToPayload(), replyToMessageId, callbackData, cancellationToken);
 
-        return SendAsync(
-            to,
-            replyToMessageId,
-            payload =>
-            {
-                payload.Type = "interactive";
-                payload.Interactive = interactive;
-            },
-            cancellationToken);
-    }
+    public Task<SentMessage> SendFlowAsync(
+        string to,
+        FlowMessage message,
+        string? replyToMessageId = null,
+        string? callbackData = null,
+        CancellationToken cancellationToken = default) =>
+        SendInteractiveAsync(to, message.ToPayload(), replyToMessageId, callbackData, cancellationToken);
 
     public Task<SentMessage> SendTemplateAsync(
         string to,
         TemplateMessage template,
         string? replyToMessageId = null,
+        string? callbackData = null,
         CancellationToken cancellationToken = default)
     {
         var payloadTemplate = template.ToPayload();
@@ -242,6 +239,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         return SendAsync(
             to,
             replyToMessageId,
+            callbackData,
             payload =>
             {
                 payload.Type = "template";
@@ -287,14 +285,37 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
             .ConfigureAwait(false);
     }
 
+    /// <remarks>
+    /// Four of the interactive kinds differ only in the payload they build, so they share the
+    /// send rather than repeating it.
+    /// </remarks>
+    private Task<SentMessage> SendInteractiveAsync(
+        string to,
+        InteractivePayload interactive,
+        string? replyToMessageId,
+        string? callbackData,
+        CancellationToken cancellationToken) =>
+        SendAsync(
+            to,
+            replyToMessageId,
+            callbackData,
+            payload =>
+            {
+                payload.Type = "interactive";
+                payload.Interactive = interactive;
+            },
+            cancellationToken);
+
     private Task<SentMessage> ReactAsync(
         string to,
         string messageId,
         string emoji,
+        string? callbackData,
         CancellationToken cancellationToken) =>
         SendAsync(
             to,
             replyToMessageId: null,
+            callbackData,
             payload =>
             {
                 payload.Type = "reaction";
@@ -305,10 +326,21 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
     private async Task<SentMessage> SendAsync(
         string to,
         string? replyToMessageId,
+        string? callbackData,
         Action<SendMessagePayload> build,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(to);
+
+        if (callbackData is { Length: > MaxCallbackDataLength })
+        {
+            // Meta answers an oversized one with a bare 100 that says nothing about which
+            // field it objected to.
+            throw new ArgumentException(
+                $"Callback data is at most {MaxCallbackDataLength} characters, and this one is " +
+                $"{callbackData.Length}. Keep the rest against the message id instead.",
+                nameof(callbackData));
+        }
 
         var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
             .ConfigureAwait(false);
@@ -316,6 +348,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         var payload = new SendMessagePayload
         {
             To = to,
+            CallbackData = callbackData,
             Context = replyToMessageId is null
                 ? null
                 : new MessageContextPayload { MessageId = replyToMessageId },

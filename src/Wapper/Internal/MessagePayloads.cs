@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Wapper.Internal;
@@ -36,6 +37,13 @@ internal sealed class SendMessagePayload
 
     [JsonPropertyName("typing_indicator")]
     public TypingIndicatorPayload? TypingIndicator { get; set; }
+
+    /// <summary>
+    /// Handed back untouched on every status this message produces. Meta caps it at 512
+    /// characters and never looks inside it.
+    /// </summary>
+    [JsonPropertyName("biz_opaque_callback_data")]
+    public string? CallbackData { get; set; }
 
     [JsonPropertyName("context")]
     public MessageContextPayload? Context { get; set; }
@@ -306,7 +314,7 @@ internal sealed class InteractiveActionPayload
     public string? Name { get; set; }
 
     [JsonPropertyName("parameters")]
-    public CallToActionParametersPayload? Parameters { get; set; }
+    public InteractiveParametersPayload? Parameters { get; set; }
 }
 
 internal sealed class InteractiveButtonPayload
@@ -348,13 +356,65 @@ internal sealed class InteractiveRowPayload
     public string? Description { get; set; }
 }
 
-internal sealed class CallToActionParametersPayload
+/// <summary>
+/// The parameters of an interactive action.
+/// </summary>
+/// <remarks>
+/// One class covering both shapes that use this field — the call-to-action button and the
+/// Flow — for the same reason <see cref="SendMessagePayload"/> is one class: nulls are
+/// dropped on write, so only the fields the action in hand actually set appear.
+/// </remarks>
+internal sealed class InteractiveParametersPayload
 {
+    // A call-to-action button.
+
     [JsonPropertyName("display_text")]
     public string? DisplayText { get; set; }
 
     [JsonPropertyName("url")]
     public string? Url { get; set; }
+
+    // A Flow.
+
+    /// <summary>Always "3". Meta rejects anything else, and takes it as a string.</summary>
+    [JsonPropertyName("flow_message_version")]
+    public string? FlowMessageVersion { get; set; }
+
+    [JsonPropertyName("flow_token")]
+    public string? FlowToken { get; set; }
+
+    [JsonPropertyName("flow_id")]
+    public string? FlowId { get; set; }
+
+    [JsonPropertyName("flow_name")]
+    public string? FlowName { get; set; }
+
+    /// <summary>The label on the button that opens the Flow.</summary>
+    [JsonPropertyName("flow_cta")]
+    public string? FlowCallToAction { get; set; }
+
+    [JsonPropertyName("flow_action")]
+    public string? FlowAction { get; set; }
+
+    /// <summary>Only ever "draft". Left out entirely for a published Flow.</summary>
+    [JsonPropertyName("mode")]
+    public string? Mode { get; set; }
+
+    [JsonPropertyName("flow_action_payload")]
+    public FlowActionPayload? FlowActionPayload { get; set; }
+}
+
+internal sealed class FlowActionPayload
+{
+    [JsonPropertyName("screen")]
+    public string? Screen { get; set; }
+
+    /// <summary>
+    /// Whatever the Flow's first screen expects. Its shape belongs to the Flow, so it is
+    /// carried through as the caller wrote it rather than modelled here.
+    /// </summary>
+    [JsonPropertyName("data")]
+    public JsonElement? Data { get; set; }
 }
 
 internal sealed class TemplatePayload
