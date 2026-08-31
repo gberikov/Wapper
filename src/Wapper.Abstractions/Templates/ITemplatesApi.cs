@@ -71,6 +71,35 @@ public interface ITemplatesApi
     Task<Template> GetAsync(string templateId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Uploads the sample image, video or document a media header is reviewed with, and
+    /// returns the handle to build the header from.
+    /// </summary>
+    /// <param name="content">The bytes. Read once, from the current position.</param>
+    /// <param name="mimeType">Media type, for example <c>image/png</c>.</param>
+    /// <param name="cancellationToken">Cancels the upload.</param>
+    /// <returns>
+    /// A handle for <see cref="TemplateHeader.FromImage"/>, <see cref="TemplateHeader.FromVideo"/>
+    /// or <see cref="TemplateHeader.FromDocument"/>. Not a media id: the two are issued by
+    /// different endpoints and are not interchangeable.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Goes through the Resumable Upload API, which is addressed to the Meta app rather than
+    /// to the account and so needs <see cref="WhatsAppCredentials.AppId"/> — the only other
+    /// thing in this library that does is setting the business profile picture.
+    /// </para>
+    /// <para>
+    /// The file is buffered in memory so the upload can be retried, which is fine for a
+    /// sample and wrong for anything large. The sample is reviewed along with the template;
+    /// the media actually sent with each message is supplied at send time.
+    /// </para>
+    /// </remarks>
+    Task<string> UploadHeaderSampleAsync(
+        Stream content,
+        string mimeType,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Submits a new template for review.
     /// </summary>
     /// <param name="template">

@@ -10,6 +10,25 @@ internal static class TemplateMapping
     {
         ArgumentNullException.ThrowIfNull(template);
 
+        return new TemplateDefinitionPayload
+        {
+            Name = template.Name,
+            Language = template.Language,
+            Category = ToWire(template.Category),
+            ParameterFormat = template.ParameterFormat == TemplateParameterFormat.Named
+                ? "NAMED"
+                : "POSITIONAL",
+            AllowCategoryChange = allowCategoryChange,
+            MessageSendTtlSeconds = template.TimeToLive is { } ttl ? (int)ttl.TotalSeconds : null,
+            Components = ToComponents(template),
+        };
+    }
+
+    /// <summary>The components alone, which is all an edit is allowed to send.</summary>
+    public static List<TemplateComponentDefinitionPayload> ToComponents(Template template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+
         var components = new List<TemplateComponentDefinitionPayload>(4);
 
         if (template.Header is { } header)
@@ -48,18 +67,7 @@ internal static class TemplateMapping
             });
         }
 
-        return new TemplateDefinitionPayload
-        {
-            Name = template.Name,
-            Language = template.Language,
-            Category = ToWire(template.Category),
-            ParameterFormat = template.ParameterFormat == TemplateParameterFormat.Named
-                ? "NAMED"
-                : "POSITIONAL",
-            AllowCategoryChange = allowCategoryChange,
-            MessageSendTtlSeconds = template.TimeToLive is { } ttl ? (int)ttl.TotalSeconds : null,
-            Components = components,
-        };
+        return components;
     }
 
     public static Template ToTemplate(this TemplateDefinitionPayload payload)

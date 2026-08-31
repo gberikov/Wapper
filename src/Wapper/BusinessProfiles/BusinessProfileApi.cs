@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Net.Mail;
 using Wapper.Internal;
 
@@ -100,7 +99,8 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
         var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
             .ConfigureAwait(false);
 
-        var handle = await UploadAsync(credentials, picture, mimeType, cancellationToken)
+        var handle = await ResumableUpload
+            .UploadAsync(client, tenant, credentials, picture, mimeType, "profile", cancellationToken)
             .ConfigureAwait(false);
 
         await UpdateAsync(
@@ -108,80 +108,6 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
                 phoneNumberId,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Puts a file through Meta's resumable upload and returns the handle it becomes.
-    /// </summary>
-    /// <remarks>
-    /// Two calls: one to open a session against the app, one to send the bytes. Nothing about
-    /// this endpoint looks like the rest of the Graph API — it wants the token under the
-    /// <c>OAuth</c> scheme instead of <c>Bearer</c>, it takes the body as raw bytes, and it
-    /// answers with a single-letter field.
-    /// </remarks>
-    private async Task<string> UploadAsync(
-        WhatsAppCredentials credentials,
-        Stream picture,
-        string mimeType,
-        CancellationToken cancellationToken)
-    {
-        var appId = GraphApiClient.RequireApp(credentials);
-
-        // The session has to declare the length up front, and a retry has to be able to send
-        // the bytes again. Both are answered by reading the picture into memory once.
-        using var buffer = new MemoryStream();
-        await picture.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        var bytes = buffer.ToArray();
-
-        var session = await client.SendAsync(
-                new GraphRequest
-                {
-                    Tenant = tenant,
-                    Credentials = credentials,
-                    Method = HttpMethod.Post,
-                    Path = $"{appId}/uploads?file_name=profile&file_length={bytes.Length}" +
-                           $"&file_type={Uri.EscapeDataString(mimeType)}",
-                },
-                WhatsAppJsonContext.Default.UploadSessionResponse,
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        var sessionId = session.Id ?? throw new WhatsAppException(
-            "Meta opened an upload session without returning its id, so there is nowhere to " +
-            "send the picture.");
-
-        var uploaded = await client.SendAsync(
-                new GraphRequest
-                {
-                    Tenant = tenant,
-                    Credentials = credentials,
-                    Method = HttpMethod.Post,
-                    // Already carries its own "upload:" prefix.
-                    Path = sessionId,
-                    Content = () =>
-                    {
-                        var content = new ByteArrayContent(bytes);
-                        content.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
-                        return content;
-                    },
-                    Configure = request =>
-                    {
-                        // Bearer is refused here. This endpoint predates the convention the
-                        // rest of the Graph API follows.
-                        request.Headers.Authorization =
-                            new AuthenticationHeaderValue("OAuth", credentials.AccessToken);
-                        // Where to resume from. Always the start: the whole picture goes up in
-                        // one call.
-                        request.Headers.TryAddWithoutValidation("file_offset", "0");
-                    },
-                },
-                WhatsAppJsonContext.Default.UploadedFileResponse,
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        return uploaded.Handle ?? throw new WhatsAppException(
-            "Meta accepted the picture but returned no handle, so there is nothing to set the " +
-            "profile picture to.");
     }
 
     private static BusinessProfilePayload ToPayload(BusinessProfile profile)
@@ -308,5 +234,7 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
     };
 
     private static string Target(string? phoneNumberId, WhatsAppCredentials credentials) =>
-        string.IsNullOrWhiteSpace(phoneNumberId) ? credentials.PhoneNumberId : phoneNumberId;
+        string.IsNullOrWhiteSpace(phoneNumberId)
+            ? credentials.PhoneNumberId
+            : GraphApiClient.PathSegment(phoneNumberId);
 }
