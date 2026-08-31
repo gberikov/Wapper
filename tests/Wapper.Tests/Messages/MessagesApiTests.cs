@@ -341,6 +341,22 @@ public class MessagesApiTests
     }
 
     [Fact]
+    public async Task A_location_request_is_an_interactive_message_with_the_one_action_it_takes()
+    {
+        var (messages, handler) = Create();
+
+        await messages.SendLocationRequestAsync(
+            "79000000001",
+            "Where should we deliver to?",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var interactive = Body(handler).GetProperty("interactive");
+        Assert.Equal("location_request_message", interactive.GetProperty("type").GetString());
+        Assert.Equal("Where should we deliver to?", interactive.GetProperty("body").GetProperty("text").GetString());
+        Assert.Equal("send_location", interactive.GetProperty("action").GetProperty("name").GetString());
+    }
+
+    [Fact]
     public async Task A_template_carries_its_language_and_values()
     {
         var (messages, handler) = Create();
@@ -602,6 +618,25 @@ public class MessagesApiTests
                 Screen = "S", DataJson = "{not json",
             },
             "not valid JSON"
+        },
+        {
+            // Meta documents the data as a non-empty object and rejects {} with a bare 100.
+            new FlowMessage
+            {
+                FlowId = "1", FlowToken = "t", ButtonText = "b", Body = "x",
+                Screen = "S", DataJson = "{}",
+            },
+            "empty"
+        },
+        {
+            // The endpoint decides the first screen, so a payload naming one is refused
+            // outright rather than ignored.
+            new FlowMessage
+            {
+                FlowId = "1", FlowToken = "t", ButtonText = "b", Body = "x",
+                Action = FlowAction.DataExchange, DataJson = """{"seats":4}""",
+            },
+            "DataJson"
         },
     };
 

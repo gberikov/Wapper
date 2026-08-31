@@ -150,6 +150,37 @@ internal sealed class WebhookValue
 
     // A Flow alert's own `errors` array lands in Errors above. It shares the field name with
     // the message-level errors and nothing else, which is why GraphError carries both shapes.
+
+    // Marketing preference changes. Shaped like a messages delivery — metadata and contacts
+    // — with this array in place of the messages.
+
+    [JsonPropertyName("user_preferences")]
+    public List<WebhookUserPreference>? UserPreferences { get; set; }
+}
+
+internal sealed class WebhookUserPreference
+{
+    [JsonPropertyName("wa_id")]
+    public string? WaId { get; set; }
+
+    [JsonPropertyName("detail")]
+    public string? Detail { get; set; }
+
+    /// <summary>Only ever <c>marketing_messages</c> so far.</summary>
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+
+    /// <summary><c>stop</c> or <c>resume</c>.</summary>
+    [JsonPropertyName("value")]
+    public string? Value { get; set; }
+
+    /// <summary>
+    /// Unix seconds, and — unlike every timestamp on a message — sent as a number. Read
+    /// either way, in case Meta lines it up with the others one day.
+    /// </summary>
+    [JsonPropertyName("timestamp")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Timestamp { get; set; }
 }
 
 internal sealed class WebhookOtherInfo

@@ -219,6 +219,29 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         CancellationToken cancellationToken = default) =>
         SendInteractiveAsync(to, message.ToPayload(), replyToMessageId, callbackData, cancellationToken);
 
+    public Task<SentMessage> SendLocationRequestAsync(
+        string to,
+        string body,
+        string? replyToMessageId = null,
+        string? callbackData = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(body);
+
+        return SendInteractiveAsync(
+            to,
+            new InteractivePayload
+            {
+                Type = "location_request_message",
+                Body = new InteractiveTextPayload { Text = body },
+                // The one action this type takes, and Meta insists on it by name.
+                Action = new InteractiveActionPayload { Name = "send_location" },
+            },
+            replyToMessageId,
+            callbackData,
+            cancellationToken);
+    }
+
     public Task<SentMessage> SendFlowAsync(
         string to,
         FlowMessage message,
@@ -286,8 +309,8 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
     }
 
     /// <remarks>
-    /// Four of the interactive kinds differ only in the payload they build, so they share the
-    /// send rather than repeating it.
+    /// The interactive kinds differ only in the payload they build, so they share the send
+    /// rather than repeating it.
     /// </remarks>
     private Task<SentMessage> SendInteractiveAsync(
         string to,
