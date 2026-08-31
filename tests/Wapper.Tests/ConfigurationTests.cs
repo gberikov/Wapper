@@ -195,6 +195,183 @@ public class OptionsCredentialsProviderTests
     }
 }
 
+/// <summary>
+/// What <c>AddWhatsApp()</c> does when nobody hands it a section: it finds the conventional
+/// one itself, so a single-number application registers the client in one call with no
+/// arguments at all.
+/// </summary>
+public class ConventionalConfigurationTests
+{
+    [Fact]
+    public void No_arguments_reads_the_WhatsApp_section()
+    {
+        var options = Resolve(
+            new Dictionary<string, string?>
+            {
+                ["WhatsApp:AccessToken"] = "the-token",
+                ["WhatsApp:PhoneNumberId"] = "106540352242922",
+                ["WhatsApp:GraphApiVersion"] = "v27.0",
+            },
+            services => services.AddWhatsApp());
+
+        var @default = options.Get(WhatsAppTenant.Default);
+        Assert.Equal("the-token", @default.AccessToken);
+        Assert.Equal("106540352242922", @default.PhoneNumberId);
+        Assert.Equal("v27.0", @default.GraphApiVersion);
+    }
+
+    [Fact]
+    public void A_tenant_is_bound_the_first_time_it_is_asked_for()
+    {
+        // Nothing enumerated the tenants, because nothing was given the section to enumerate.
+        // The name arrives with the request for the options, which is enough.
+        var options = Resolve(
+            new Dictionary<string, string?>
+            {
+                ["WhatsApp:WhatsAppBusinessAccountId"] = "shared-waba",
+                ["WhatsApp:RateLimits:MessagesPerSecond"] = "80",
+                ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+                ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+                ["WhatsApp:Tenants:globex:AccessToken"] = "globex-token",
+                ["WhatsApp:Tenants:globex:PhoneNumberId"] = "222",
+                ["WhatsApp:Tenants:globex:RateLimits:MessagesPerSecond"] = "1000",
+            },
+            services => services.AddWhatsApp());
+
+        var acme = options.Get("acme");
+        Assert.Equal("acme-token", acme.AccessToken);
+        // Inherited from the section around it, exactly as when the section is passed in.
+        Assert.Equal("shared-waba", acme.WhatsAppBusinessAccountId);
+        Assert.Equal(80, acme.RateLimits.MessagesPerSecond);
+
+        Assert.Equal(1000, options.Get("globex").RateLimits.MessagesPerSecond);
+    }
+
+    [Fact]
+    public void Code_still_wins_over_the_section_it_found()
+    {
+        var options = Resolve(
+            new Dictionary<string, string?>
+            {
+                ["WhatsApp:AccessToken"] = "from-configuration",
+                ["WhatsApp:GraphApiVersion"] = "v23.0",
+            },
+            services => services.AddWhatsApp(o => o.GraphApiVersion = "v26.0"));
+
+        var @default = options.Get(WhatsAppTenant.Default);
+        // The delegate runs after the binding, so it pins one value and leaves the rest.
+        Assert.Equal("v26.0", @default.GraphApiVersion);
+        Assert.Equal("from-configuration", @default.AccessToken);
+    }
+
+    [Fact]
+    public void Configuring_entirely_in_code_needs_no_configuration_at_all()
+    {
+        // A console application or a test has no IConfiguration, and asking for one would
+        // turn that into a resolve-time failure for a registration that never wanted it.
+        var services = new ServiceCollection();
+        services.AddWhatsApp(o =>
+        {
+            o.AccessToken = "in-code";
+            o.PhoneNumberId = "111";
+        });
+
+        var options = services.BuildServiceProvider()
+            .GetRequiredService<IOptionsMonitor<WhatsAppOptions>>()
+            .Get(WhatsAppTenant.Default);
+
+        Assert.Equal("in-code", options.AccessToken);
+    }
+
+    [Fact]
+    public void A_section_that_is_not_there_leaves_the_defaults_alone()
+    {
+        var options = Resolve(
+            new Dictionary<string, string?> { ["Something:Else"] = "x" },
+            services => services.AddWhatsApp());
+
+        Assert.Equal("v26.0", options.Get(WhatsAppTenant.Default).GraphApiVersion);
+        Assert.Null(options.Get(WhatsAppTenant.Default).AccessToken);
+    }
+
+    [Fact]
+    public void Registering_several_tenants_in_code_binds_each_from_its_own_entry()
+    {
+        var options = Resolve(
+            new Dictionary<string, string?>
+            {
+                ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+                ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+                ["WhatsApp:Tenants:globex:AccessToken"] = "globex-token",
+                ["WhatsApp:Tenants:globex:PhoneNumberId"] = "222",
+            },
+            services =>
+            {
+                // Two calls, so the convention binding is registered twice and has to
+                // deduplicate rather than bind everything twice over.
+                services.AddWhatsApp("acme");
+                services.AddWhatsApp("globex");
+            });
+
+        Assert.Equal("acme-token", options.Get("acme").AccessToken);
+        Assert.Equal("globex-token", options.Get("globex").AccessToken);
+
+        // Bound once, so the defaults are not repeated. Configuration adds to this list
+        // rather than replacing it, which makes a double bind visible.
+        Assert.Equal(4, options.Get("acme").MediaDownloadHosts.Count);
+    }
+
+    [Fact]
+    public void A_section_of_another_name_is_read_instead_of_the_conventional_one()
+    {
+        // The other half of the bargain: naming a section means read that one, so a stray
+        // "WhatsApp" section left in appsettings cannot quietly supply a token or an API
+        // version to an application that deliberately keeps its settings somewhere else.
+        var options = Resolve(
+            new Dictionary<string, string?>
+            {
+                ["WhatsApp:AccessToken"] = "the-wrong-token",
+                ["WhatsApp:GraphApiVersion"] = "v23.0",
+
+                ["Messaging:WhatsAppCloud:AccessToken"] = "the-right-token",
+                ["Messaging:WhatsAppCloud:PhoneNumberId"] = "106540352242922",
+                ["Messaging:WhatsAppCloud:Tenants:acme:PhoneNumberId"] = "111",
+            },
+            services => services.AddWhatsApp(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["AccessToken"] = "the-right-token",
+                        ["PhoneNumberId"] = "106540352242922",
+                        ["Tenants:acme:PhoneNumberId"] = "111",
+                    })
+                    .Build()));
+
+        var @default = options.Get(WhatsAppTenant.Default);
+        Assert.Equal("the-right-token", @default.AccessToken);
+        Assert.Equal("v26.0", @default.GraphApiVersion);
+
+        // Tenants hang off whichever section was named, not off "WhatsApp".
+        var acme = options.Get("acme");
+        Assert.Equal("111", acme.PhoneNumberId);
+        Assert.Equal("the-right-token", acme.AccessToken);
+    }
+
+    private static IOptionsMonitor<WhatsAppOptions> Resolve(
+        Dictionary<string, string?> settings,
+        Action<IServiceCollection> register)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+
+        var services = new ServiceCollection();
+        // What a host registers, and the only thing the convention has to go on.
+        services.AddSingleton<IConfiguration>(configuration);
+        register(services);
+
+        return services.BuildServiceProvider().GetRequiredService<IOptionsMonitor<WhatsAppOptions>>();
+    }
+}
+
 public class ConfigurationBindingTests
 {
     [Fact]

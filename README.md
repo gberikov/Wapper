@@ -39,7 +39,7 @@ arrives, and telling the errors apart — lives in [`samples/Wapper.Sample`](sam
 ## Getting started
 
 ```csharp
-builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+builder.Services.AddWhatsApp();
 ```
 
 ```jsonc
@@ -99,7 +99,7 @@ Name each one in configuration and ask for it by name:
 await whatsApp.For("acme").Messages.SendTextAsync(customer, "hello", cancellationToken: ct);
 ```
 
-The same `AddWhatsApp(section)` call registers them. See
+The same `AddWhatsApp()` call registers them. See
 [Configuration](docs/configuration.md) for what a tenant inherits, where the tokens should
 live, and what to do when they come from a database rather than a file.
 
