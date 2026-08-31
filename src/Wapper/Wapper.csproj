@@ -2,10 +2,17 @@
 
   <PropertyGroup>
     <Description>A modern .NET client for the WhatsApp Cloud API, with built-in rate limiting, retries and multi-tenant credentials.</Description>
+    <!-- Replaces reflection-based configuration binding with generated code, so the
+         IConfiguration overloads of AddWhatsApp stay usable under trimming and AOT. -->
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Wapper.Abstractions/Wapper.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wapper.Tests" />
   </ItemGroup>
 
   <ItemGroup>
