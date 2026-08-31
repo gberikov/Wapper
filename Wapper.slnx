@@ -9,4 +9,7 @@
     <Project Path="tests/Wapper.RateLimiting.Redis.Tests/Wapper.RateLimiting.Redis.Tests.csproj" />
     <Project Path="tests/Wapper.Tests/Wapper.Tests.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Wapper.Sample/Wapper.Sample.csproj" />
+  </Folder>
 </Solution>

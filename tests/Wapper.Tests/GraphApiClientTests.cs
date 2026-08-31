@@ -142,6 +142,21 @@ public class GraphApiClientTests
     }
 
     [Theory]
+    // Climbing out from under the API version addresses something other than the endpoint
+    // that was named. `..` folds whether it is escaped or not, so this is the only place to
+    // catch an id that reached the path without being checked.
+    [InlineData("../../oauth/access_token")]
+    [InlineData("..")]
+    [InlineData("%2e%2e/%2e%2e/oauth")]
+    public void A_path_that_leaves_the_api_version_behind_is_refused(string path)
+    {
+        var exception = Assert.Throws<WhatsAppException>(() =>
+            GraphApiClient.BuildUri(new WhatsAppOptions(), path));
+
+        Assert.Contains("v26.0", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     // A base address without a trailing slash would otherwise lose its last segment, and a
     // leading slash on the relative part would drop the base path entirely.
     [InlineData("https://graph.facebook.com", "123/messages", "https://graph.facebook.com/v26.0/123/messages")]
@@ -156,6 +171,36 @@ public class GraphApiClientTests
         var options = new WhatsAppOptions { BaseAddress = new Uri(baseAddress) };
 
         Assert.Equal(expected, GraphApiClient.BuildUri(options, path).AbsoluteUri);
+    }
+
+    [Theory]
+    // Every Graph id is digits, and comes through untouched.
+    [InlineData("1387372356726668", "1387372356726668")]
+    // Anything else is escaped so it stays one segment.
+    [InlineData("a b", "a%20b")]
+    public void An_identifier_handed_in_by_a_caller_stays_one_path_segment(string id, string expected)
+    {
+        Assert.Equal(expected, GraphApiClient.PathSegment(id));
+    }
+
+    [Theory]
+    // A media id shaped like this would turn a media delete into a template delete, under
+    // the caller's own token, against a resource the caller never named.
+    [InlineData("../123/message_templates?name=x&")]
+    [InlineData("123/messages")]
+    [InlineData("123?phone_number_id=9")]
+    [InlineData("123#frag")]
+    // Escaping does not help with these: Uri folds a bare dot segment either way.
+    [InlineData("..")]
+    [InlineData(".")]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void An_identifier_that_could_leave_its_segment_is_refused(string id)
+    {
+        var exception = Assert.ThrowsAny<ArgumentException>(() => GraphApiClient.PathSegment(id));
+
+        // Named after the caller's own argument, so the message points at the right thing.
+        Assert.Equal("id", exception.ParamName);
     }
 
     [Fact]

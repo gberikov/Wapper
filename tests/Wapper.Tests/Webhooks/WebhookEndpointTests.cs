@@ -46,6 +46,7 @@ public class WebhookEndpointTests : IAsyncLifetime
         _recorder = new Recorder();
         builder.Services.AddSingleton(_recorder);
         builder.Services.AddWhatsAppWebhookHandler<TextHandler, TextMessage>(ServiceLifetime.Singleton);
+        builder.Services.AddWhatsAppWebhookHandler<OptOutHandler, MarketingPreferenceChanged>(ServiceLifetime.Singleton);
         builder.Services.AddWhatsAppWebhookHandler<CatchAllHandler, WhatsAppEvent>(ServiceLifetime.Singleton);
 
         _app = builder.Build();
@@ -139,6 +140,26 @@ public class WebhookEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_marketing_opt_out_reaches_the_handler_registered_for_it()
+    {
+        const string OptOut = """
+            {"object":"whatsapp_business_account","entry":[{"id":"W","changes":[{"field":"user_preferences",
+             "value":{"messaging_product":"whatsapp",
+              "metadata":{"display_phone_number":"15550001111","phone_number_id":"106540352242922"},
+              "user_preferences":[{"wa_id":"79000000001","category":"marketing_messages",
+                                   "value":"stop","timestamp":1755000000}]}}]}]}
+            """;
+
+        var response = await PostAsync(OptOut, Sign(OptOut));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var change = Assert.IsType<MarketingPreferenceChanged>(Assert.Single(_recorder.Handled));
+        Assert.Equal("79000000001", change.WhatsAppId);
+        Assert.Equal(MarketingPreference.Stop, change.Preference);
+    }
+
+    [Fact]
     public async Task A_signed_delivery_that_cannot_be_parsed_is_still_acknowledged()
     {
         const string Nonsense = """{"object":"whatsapp_business_account"}""";
@@ -181,6 +202,15 @@ public class WebhookEndpointTests : IAsyncLifetime
     private sealed class TextHandler(Recorder recorder) : IWhatsAppEventHandler<TextMessage>
     {
         public Task HandleAsync(TextMessage notification, CancellationToken cancellationToken = default)
+        {
+            recorder.Handled.Add(notification);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class OptOutHandler(Recorder recorder) : IWhatsAppEventHandler<MarketingPreferenceChanged>
+    {
+        public Task HandleAsync(MarketingPreferenceChanged notification, CancellationToken cancellationToken = default)
         {
             recorder.Handled.Add(notification);
             return Task.CompletedTask;

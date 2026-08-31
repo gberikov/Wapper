@@ -163,6 +163,25 @@ public interface IMessagesApi
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Asks the customer to share a location, with a button that opens the map.
+    /// </summary>
+    /// <param name="to">Recipient, in international format without a leading plus.</param>
+    /// <param name="body">The text above the button. Up to 1024 characters.</param>
+    /// <param name="replyToMessageId">A message to quote.</param>
+    /// <param name="callbackData">Echoed back on this message's delivery statuses.</param>
+    /// <param name="cancellationToken">Cancels the send.</param>
+    /// <remarks>
+    /// What they pick arrives on the webhook as a <c>LocationMessage</c>, exactly as a
+    /// location they shared unprompted would.
+    /// </remarks>
+    Task<SentMessage> SendLocationRequestAsync(
+        string to,
+        string body,
+        string? replyToMessageId = null,
+        string? callbackData = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sends a message that opens a Flow: a form the customer fills in inside WhatsApp.
     /// </summary>
     /// <remarks>

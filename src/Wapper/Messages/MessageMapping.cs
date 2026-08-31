@@ -184,7 +184,7 @@ internal static class MessageMapping
         {
             throw new ArgumentException(
                 "A Flow message names the Flow either by id or by name, and this one names " +
-                (message.FlowId is null ? "neither." : "both."),
+                (string.IsNullOrWhiteSpace(message.FlowId) ? "neither." : "both."),
                 nameof(message));
         }
 
@@ -195,6 +195,19 @@ internal static class MessageMapping
                 "A Flow that navigates opens on a screen, so Screen has to be set. Use " +
                 $"{nameof(FlowAction)}.{nameof(FlowAction.DataExchange)} to let the Flow's " +
                 "endpoint decide instead.",
+                nameof(message));
+        }
+
+        if (message.Action == FlowAction.DataExchange
+            && (message.Screen is not null || message.DataJson is not null))
+        {
+            // The first screen comes from the endpoint, so there is nothing to name and
+            // nothing to hand it. Meta rejects the payload outright rather than ignoring it.
+            throw new ArgumentException(
+                "A Flow that asks its endpoint for the first screen takes neither a Screen " +
+                "nor DataJson. Leave both unset, or use " +
+                $"{nameof(FlowAction)}.{nameof(FlowAction.Navigate)} to open on a screen of " +
+                "your own.",
                 nameof(message));
         }
 
@@ -251,7 +264,20 @@ internal static class MessageMapping
                 throw new ArgumentException(
                     $"The data handed to a Flow screen is a JSON object, and this is a " +
                     $"{document.RootElement.ValueKind}.",
-                    nameof(json));
+                    nameof(FlowMessage.DataJson));
+            }
+
+            using var properties = document.RootElement.EnumerateObject();
+
+            if (!properties.MoveNext())
+            {
+                // Meta documents the data as a non-empty object and rejects {} with a bare
+                // 100. Leaving the property unset is how a screen is handed nothing.
+                throw new ArgumentException(
+                    "The data handed to a Flow screen is a non-empty JSON object, and this " +
+                    $"one is empty. Leave {nameof(FlowMessage.DataJson)} unset to hand the " +
+                    "screen nothing.",
+                    nameof(FlowMessage.DataJson));
             }
 
             return document.RootElement.Clone();
@@ -260,7 +286,7 @@ internal static class MessageMapping
         {
             throw new ArgumentException(
                 "The data handed to a Flow screen is not valid JSON.",
-                nameof(json),
+                nameof(FlowMessage.DataJson),
                 exception);
         }
     }

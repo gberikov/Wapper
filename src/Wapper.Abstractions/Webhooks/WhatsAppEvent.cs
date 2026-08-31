@@ -427,13 +427,22 @@ public sealed record MessageStatusChanged : WhatsAppEvent
 }
 
 /// <summary>
-/// A delivery on a webhook field this library has no typed event for.
+/// A change this library could not turn into a typed event.
 /// </summary>
 /// <remarks>
-/// Meta has more than twenty webhook fields and adds to them; this library types the ones it
-/// can act on. Anything else would otherwise be dropped without trace — an account being
-/// offboarded, a customer opting out of marketing, a template's components being rewritten.
-/// It arrives here instead, with the body it came in, so an application can notice and decide.
+/// <para>
+/// Usually a webhook field this library has no event for. Meta has more than twenty and adds
+/// to them; this library types the ones it can act on, and anything else would otherwise be
+/// dropped without trace — an account being offboarded, a template's components being
+/// rewritten. It arrives here instead, with the body it came in, so an application can notice
+/// and decide.
+/// </para>
+/// <para>
+/// Occasionally a field this library does know — <c>messages</c>, say — shaped in a way it
+/// could not read. That lands here too, under the same <see cref="Field"/>, rather than being
+/// dropped: a handler for this event is the one place to find out that something is being
+/// discarded.
+/// </para>
 /// </remarks>
 public sealed record UnknownEvent : WhatsAppEvent
 {

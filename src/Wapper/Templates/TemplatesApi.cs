@@ -9,6 +9,19 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
     /// <summary>Meta refuses more than this many ids on one delete.</summary>
     private const int MaxBulkDelete = 100;
 
+    /// <summary>
+    /// The fields to ask for.
+    /// </summary>
+    /// <remarks>
+    /// Most of these come back by default, but not the two a template is most often read
+    /// for once it exists: <c>quality_score</c>, which says whether it is about to be paused,
+    /// and <c>rejected_reason</c>, which says why review turned it down. Without an explicit
+    /// list both are silently absent.
+    /// </remarks>
+    private const string Fields =
+        "id,name,language,category,sub_category,status,parameter_format," +
+        "message_send_ttl_seconds,quality_score,rejected_reason,previous_category,components";
+
     public async IAsyncEnumerable<Template> ListAsync(
         TemplateQuery? query = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -27,6 +40,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                         Method = HttpMethod.Get,
                         Path = $"{accountId}/message_templates{BuildQuery(query, after)}",
                         Kind = GraphCallKind.Management,
+                        Operation = "templates.list",
                     },
                     WhatsAppJsonContext.Default.TemplateListResponse,
                     cancellationToken)
@@ -46,7 +60,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
         string templateId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(templateId);
+        var id = GraphApiClient.PathSegment(templateId);
 
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
 
@@ -56,8 +70,9 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Tenant = tenant,
                     Credentials = credentials,
                     Method = HttpMethod.Get,
-                    Path = templateId,
+                    Path = $"{id}?fields={Fields}",
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.get",
                 },
                 WhatsAppJsonContext.Default.TemplateDefinitionPayload,
                 cancellationToken)
@@ -86,6 +101,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Post,
                     Path = $"{accountId}/message_templates",
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.create",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
@@ -112,16 +128,18 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
         Template template,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(templateId);
+        var id = GraphApiClient.PathSegment(templateId);
         ArgumentNullException.ThrowIfNull(template);
 
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         // Only the components go up. Name, language and category are not editable this way,
-        // and sending them makes the call fail rather than being ignored.
+        // and sending them makes the call fail rather than being ignored — which is also why
+        // the category is never translated here: a template read back with one this library
+        // does not know is still editable.
         var payload = new TemplateDefinitionPayload
         {
-            Components = template.ToPayload(allowCategoryChange: null).Components,
+            Components = TemplateMapping.ToComponents(template),
             MessageSendTtlSeconds = template.TimeToLive is { } ttl ? (int)ttl.TotalSeconds : null,
         };
 
@@ -131,8 +149,9 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Tenant = tenant,
                     Credentials = credentials,
                     Method = HttpMethod.Post,
-                    Path = templateId,
+                    Path = id,
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.update",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
@@ -147,7 +166,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
         TemplateCategory category,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(templateId);
+        var id = GraphApiClient.PathSegment(templateId);
 
         var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
         var payload = new TemplateDefinitionPayload { Category = TemplateMapping.ToWire(category) };
@@ -158,13 +177,37 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Tenant = tenant,
                     Credentials = credentials,
                     Method = HttpMethod.Post,
-                    Path = templateId,
+                    Path = id,
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.update_category",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<string> UploadHeaderSampleAsync(
+        Stream content,
+        string mimeType,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mimeType);
+
+        var credentials = await ResolveAsync(cancellationToken).ConfigureAwait(false);
+
+        return await ResumableUpload
+            .UploadAsync(
+                client,
+                tenant,
+                credentials,
+                content,
+                mimeType,
+                "sample",
+                "templates.upload_sample",
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -231,6 +274,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Method = HttpMethod.Delete,
                     Path = $"{accountId}/message_templates?{query}",
                     Kind = GraphCallKind.Management,
+                    Operation = "templates.delete",
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
@@ -239,7 +283,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
 
     private static string BuildQuery(TemplateQuery? query, string? after)
     {
-        var parts = new List<string>(5);
+        var parts = new List<string>(7) { $"fields={Fields}" };
 
         if (query?.Name is { } name)
         {
@@ -271,7 +315,7 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
             parts.Add($"after={Uri.EscapeDataString(after)}");
         }
 
-        return parts.Count == 0 ? string.Empty : "?" + string.Join('&', parts);
+        return "?" + string.Join('&', parts);
     }
 
     private static void GuardName(string name)

@@ -171,6 +171,21 @@ public class MediaApiTests
     }
 
     [Fact]
+    public async Task A_media_id_that_is_really_a_path_never_reaches_the_wire()
+    {
+        var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, """{"success":true}""");
+        var media = CreateApi(handler);
+
+        // From a webhook, or from a caller's own store: an id is data, and this one would
+        // otherwise delete every template on the account instead of a file.
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            media.DeleteAsync("../102290129340398/message_templates?name=order_confirmation&", TestContext.Current.CancellationToken));
+
+        Assert.Equal("mediaId", exception.ParamName);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task Delete_reports_what_the_api_said()
     {
         var media = CreateApi(StubHttpMessageHandler.Returning(HttpStatusCode.OK, """{"success":true}"""));

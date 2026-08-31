@@ -33,6 +33,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Credentials = credentials,
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/media",
+                    Operation = "media.upload",
                     Retryable = rewindable,
                     Content = () => BuildUpload(content, mimeType, fileName, rewindable, origin),
                 },
@@ -48,7 +49,8 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
         string mediaId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(mediaId);
+        // An id from a webhook, or from a caller's own store, goes straight into the path.
+        var id = GraphApiClient.PathSegment(mediaId);
 
         var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
             .ConfigureAwait(false);
@@ -61,7 +63,8 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Method = HttpMethod.Get,
                     // Scoping the lookup to the phone number is what stops one tenant reading
                     // another tenant's media on a shared business account.
-                    Path = $"{mediaId}?phone_number_id={Uri.EscapeDataString(credentials.PhoneNumberId)}",
+                    Path = $"{id}?phone_number_id={Uri.EscapeDataString(credentials.PhoneNumberId)}",
+                    Operation = "media.get",
                 },
                 WhatsAppJsonContext.Default.MediaInfoResponse,
                 cancellationToken)
@@ -106,6 +109,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Credentials = credentials,
                     Method = HttpMethod.Get,
                     Path = media.Url.AbsoluteUri,
+                    Operation = "media.download",
                 },
                 media.Url,
                 cancellationToken)
@@ -123,7 +127,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
         string mediaId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(mediaId);
+        var id = GraphApiClient.PathSegment(mediaId);
 
         var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
             .ConfigureAwait(false);
@@ -134,7 +138,8 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                     Tenant = tenant,
                     Credentials = credentials,
                     Method = HttpMethod.Delete,
-                    Path = $"{mediaId}?phone_number_id={Uri.EscapeDataString(credentials.PhoneNumberId)}",
+                    Path = $"{id}?phone_number_id={Uri.EscapeDataString(credentials.PhoneNumberId)}",
+                    Operation = "media.delete",
                 },
                 WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)

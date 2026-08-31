@@ -219,6 +219,29 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         CancellationToken cancellationToken = default) =>
         SendInteractiveAsync(to, message.ToPayload(), replyToMessageId, callbackData, cancellationToken);
 
+    public Task<SentMessage> SendLocationRequestAsync(
+        string to,
+        string body,
+        string? replyToMessageId = null,
+        string? callbackData = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(body);
+
+        return SendInteractiveAsync(
+            to,
+            new InteractivePayload
+            {
+                Type = "location_request_message",
+                Body = new InteractiveTextPayload { Text = body },
+                // The one action this type takes, and Meta insists on it by name.
+                Action = new InteractiveActionPayload { Name = "send_location" },
+            },
+            replyToMessageId,
+            callbackData,
+            cancellationToken);
+    }
+
     public Task<SentMessage> SendFlowAsync(
         string to,
         FlowMessage message,
@@ -276,6 +299,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/messages",
                     Kind = GraphCallKind.Message,
+                    Operation = "messages.mark_read",
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.SendMessagePayload),
@@ -286,8 +310,8 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
     }
 
     /// <remarks>
-    /// Four of the interactive kinds differ only in the payload they build, so they share the
-    /// send rather than repeating it.
+    /// The interactive kinds differ only in the payload they build, so they share the send
+    /// rather than repeating it.
     /// </remarks>
     private Task<SentMessage> SendInteractiveAsync(
         string to,
@@ -363,6 +387,10 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     Method = HttpMethod.Post,
                     Path = $"{credentials.PhoneNumberId}/messages",
                     Kind = GraphCallKind.Message,
+                    // The message type is in the span name rather than a tag: there are a
+                    // dozen of them, so it stays aggregatable, and "template sends are slow"
+                    // is exactly the question a trace is opened to answer.
+                    Operation = $"messages.send_{payload.Type}",
                     // Named so the pair allowance is counted per conversation. Without it the
                     // client would pace the phone number and walk straight into 131056.
                     Recipient = to,

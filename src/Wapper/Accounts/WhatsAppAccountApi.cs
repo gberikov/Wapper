@@ -10,6 +10,7 @@ internal sealed class WhatsAppAccountApi(GraphApiClient client, string tenant) :
     {
         var response = await SendAsync(
                 HttpMethod.Get,
+                "account.get_subscribed_apps",
                 WhatsAppJsonContext.Default.SubscribedAppListResponse,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -29,13 +30,22 @@ internal sealed class WhatsAppAccountApi(GraphApiClient client, string tenant) :
     }
 
     public Task SubscribeAsync(CancellationToken cancellationToken = default) =>
-        SendAsync(HttpMethod.Post, WhatsAppJsonContext.Default.SuccessResponse, cancellationToken);
+        SendAsync(
+            HttpMethod.Post,
+            "account.subscribe",
+            WhatsAppJsonContext.Default.SuccessResponse,
+            cancellationToken);
 
     public Task UnsubscribeAsync(CancellationToken cancellationToken = default) =>
-        SendAsync(HttpMethod.Delete, WhatsAppJsonContext.Default.SuccessResponse, cancellationToken);
+        SendAsync(
+            HttpMethod.Delete,
+            "account.unsubscribe",
+            WhatsAppJsonContext.Default.SuccessResponse,
+            cancellationToken);
 
     private async Task<TResponse> SendAsync<TResponse>(
         HttpMethod method,
+        string operation,
         System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> typeInfo,
         CancellationToken cancellationToken)
     {
@@ -51,6 +61,7 @@ internal sealed class WhatsAppAccountApi(GraphApiClient client, string tenant) :
                     Method = method,
                     Path = $"{accountId}/subscribed_apps",
                     Kind = GraphCallKind.Management,
+                    Operation = operation,
                 },
                 typeInfo,
                 cancellationToken)

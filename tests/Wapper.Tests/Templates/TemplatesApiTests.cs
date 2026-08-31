@@ -264,6 +264,83 @@ public class TemplatesApiTests
     }
 
     [Fact]
+    public async Task Reading_asks_for_the_fields_Meta_leaves_out_by_default()
+    {
+        var (templates, handler) = Create("""{"data":[]}""");
+
+        await foreach (var _ in templates.ListAsync(cancellationToken: TestContext.Current.CancellationToken))
+        {
+            // Draining the sequence is what issues the request.
+        }
+
+        // Without an explicit list a template comes back without its quality score or the
+        // reason it was rejected — the two things it is most often read for once it exists.
+        var query = Assert.Single(handler.Requests).RequestUri!.Query;
+        Assert.Contains("quality_score", query, StringComparison.Ordinal);
+        Assert.Contains("rejected_reason", query, StringComparison.Ordinal);
+        Assert.Contains("parameter_format", query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reading_one_template_asks_for_the_same_fields()
+    {
+        var (templates, handler) = Create("""
+            {"name":"n","language":"en","category":"UTILITY","status":"REJECTED","id":"1",
+             "rejected_reason":"INVALID_FORMAT","quality_score":{"score":"UNKNOWN"},
+             "components":[{"type":"BODY","text":"b"}]}
+            """);
+
+        var template = await templates.GetAsync("1387372356726668", TestContext.Current.CancellationToken);
+
+        Assert.StartsWith(
+            "https://graph.facebook.com/v26.0/1387372356726668?fields=",
+            Assert.Single(handler.Requests).RequestUri!.AbsoluteUri,
+            StringComparison.Ordinal);
+        Assert.Equal("INVALID_FORMAT", template.RejectedReason);
+        Assert.Equal(TemplateQuality.Pending, template.QualityScore);
+    }
+
+    [Fact]
+    public async Task A_header_sample_goes_through_the_resumable_upload_and_comes_back_as_a_handle()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.OK, """{"id":"upload:MTphdHRhY2htZW50"}"""),
+            (HttpStatusCode.OK, """{"h":"4:aW1hZ2U="}"""));
+        var templates = CreateWith(handler, Credentials with { AppId = "1234567890" });
+
+        var handle = await templates.UploadHeaderSampleAsync(
+            new MemoryStream([1, 2, 3]),
+            "image/png",
+            TestContext.Current.CancellationToken);
+
+        // The handle is what TemplateHeader.FromImage takes. It is not a media id, and the
+        // media endpoint would not know what to do with it.
+        Assert.Equal("4:aW1hZ2U=", handle);
+
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.StartsWith(
+            "https://graph.facebook.com/v26.0/1234567890/uploads?",
+            handler.Requests[0].RequestUri!.AbsoluteUri,
+            StringComparison.Ordinal);
+        Assert.Equal("OAuth", handler.Requests[1].Headers.Authorization!.Scheme);
+    }
+
+    [Fact]
+    public async Task A_template_read_back_with_a_category_this_library_does_not_know_can_still_be_edited()
+    {
+        var (templates, handler) = Create(Ok);
+
+        // An edit never sends the category, so there is no reason for one Meta invented last
+        // week to stop the components going up.
+        await templates.UpdateAsync(
+            "1387372356726668",
+            Draft() with { Category = TemplateCategory.Unknown },
+            TestContext.Current.CancellationToken);
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task Listing_follows_the_cursor_until_the_platform_stops_offering_one()
     {
         var handler = StubHttpMessageHandler.Sequence(

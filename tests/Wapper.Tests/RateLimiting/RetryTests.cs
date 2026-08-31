@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Wapper.Internal;
 using Wapper.RateLimiting;
@@ -328,10 +330,82 @@ public class RetryTests
         WhatsAppJsonContext.Default.GraphErrorEnvelope,
         TestContext.Current.CancellationToken);
 
+    [Fact]
+    public async Task A_retry_and_the_hold_it_imposes_are_logged_without_the_customer_s_number()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.BadRequest, Rejection(WhatsAppErrorCodes.PairRateLimitReached)),
+            (HttpStatusCode.OK, Ok));
+        var time = new FakeTimeProvider();
+        var logger = new RecordingLogger<GraphApiClient>();
+        var client = CreateClient(handler, time, logger: logger);
+
+        await Clock.RunAsync(time, SendAsync(client));
+
+        // A caller watching a send take sixty seconds deserves to be told why, and the log
+        // is the only place it can be told.
+        var retry = Assert.Single(logger.Lines, line => line.Event.Id == 1);
+        Assert.Equal(LogLevel.Information, retry.Level);
+        Assert.Contains("131056", retry.Message, StringComparison.Ordinal);
+
+        var hold = Assert.Single(logger.Lines, line => line.Event.Id == 2);
+        Assert.Equal(LogLevel.Warning, hold.Level);
+        Assert.Contains("RecipientPair", hold.Message, StringComparison.Ordinal);
+        // The pair scope is keyed by the customer's number, which is not something to log.
+        Assert.DoesNotContain("79000000001", hold.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task One_span_covers_the_whole_call_including_the_retries_it_took()
+    {
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.BadRequest, Rejection(WhatsAppErrorCodes.MessageThroughputReached)),
+            (HttpStatusCode.OK, Ok));
+        var time = new FakeTimeProvider();
+        var client = CreateClient(handler, time);
+
+        using var recorder = new ActivityRecorder();
+
+        await Clock.RunAsync(time, SendAsync(client));
+
+        // One span for the logical call, not one per attempt: that is what the caller
+        // experienced, and the attempts show up separately if the host instruments
+        // HttpClient as well.
+        var activity = Assert.Single(recorder.Activities);
+        Assert.Equal(ActivityStatusCode.Ok, activity.Status);
+        Assert.Equal(1, activity.GetTagItem("wapper.attempts"));
+        Assert.Equal(WhatsAppErrorCodes.MessageThroughputReached, activity.GetTagItem("wapper.last_error_code"));
+    }
+
+    [Fact]
+    public async Task A_failed_call_says_on_the_span_what_the_api_objected_to()
+    {
+        var handler = StubHttpMessageHandler.Returning(
+            HttpStatusCode.BadRequest,
+            Rejection(WhatsAppErrorCodes.UserOptedOut));
+        var time = new FakeTimeProvider();
+        var client = CreateClient(handler, time);
+
+        using var recorder = new ActivityRecorder();
+
+        await Assert.ThrowsAsync<WhatsAppApiException>(() => Clock.RunAsync(time, SendAsync(client)));
+
+        var activity = Assert.Single(recorder.Activities);
+        Assert.Equal(ActivityStatusCode.Error, activity.Status);
+        Assert.Equal(WhatsAppErrorCodes.UserOptedOut, activity.GetTagItem("wapper.error_code"));
+        Assert.Equal(400, activity.GetTagItem("http.response.status_code"));
+
+        // The recipient is a customer's phone number, and a trace backend is not a place to
+        // put one. The business's own number says which of your numbers was slow.
+        Assert.Equal("106540352242922", activity.GetTagItem("wapper.phone_number_id"));
+        Assert.DoesNotContain(activity.Tags, tag => tag.Value == "79000000001");
+    }
+
     private static GraphApiClient CreateClient(
         StubHttpMessageHandler handler,
         FakeTimeProvider time,
-        Action<WhatsAppOptions>? configure = null)
+        Action<WhatsAppOptions>? configure = null,
+        RecordingLogger<GraphApiClient>? logger = null)
     {
         var options = new WhatsAppOptions();
         configure?.Invoke(options);
@@ -341,6 +415,7 @@ public class RetryTests
             new StubCredentialsProvider(Credentials),
             new InMemoryRateLimiter(time),
             new StaticOptionsMonitor<WhatsAppOptions>(options),
-            time);
+            time,
+            logger);
     }
 }

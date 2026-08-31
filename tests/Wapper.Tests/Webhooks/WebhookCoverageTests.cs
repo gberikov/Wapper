@@ -190,7 +190,64 @@ public class WebhookCoverageTests
 
         var events = WhatsAppWebhookParser.Parse(Body);
 
-        var text = Assert.IsType<TextMessage>(Assert.Single(events, e => e is TextMessage));
-        Assert.Equal("hello", text.Text);
+        Assert.Equal(2, events.Count);
+
+        // The unreadable change is reported rather than dropped, under the field it came on
+        // and with the body it came with. A handler for UnknownEvent is the one place to
+        // learn that something is being discarded.
+        var unknown = Assert.IsType<UnknownEvent>(events[0]);
+        Assert.Equal("messages", unknown.Field);
+        Assert.Equal("\"nonsense\"", unknown.Json);
+
+        Assert.Equal("hello", Assert.IsType<TextMessage>(events[1]).Text);
+    }
+
+    [Fact]
+    public void A_customer_stopping_marketing_messages_is_its_own_event()
+    {
+        // Taken from Meta's user_preferences reference. The one webhook that changes what an
+        // application may send: after this, marketing templates to the customer are accepted
+        // and never delivered.
+        const string Body = """
+            {"object":"whatsapp_business_account","entry":[{"id":"102290129340398","changes":[
+              {"field":"user_preferences",
+               "value":{"messaging_product":"whatsapp",
+                "metadata":{"display_phone_number":"15550783881","phone_number_id":"106540352242922"},
+                "contacts":[{"wa_id":"16505551234"}],
+                "user_preferences":[{"wa_id":"16505551234",
+                                     "detail":"User requested to stop marketing messages",
+                                     "category":"marketing_messages",
+                                     "value":"stop",
+                                     "timestamp":1731705721}]}}]}]}
+            """;
+
+        var change = Assert.IsType<MarketingPreferenceChanged>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
+
+        Assert.Equal("16505551234", change.WhatsAppId);
+        Assert.Equal(MarketingPreference.Stop, change.Preference);
+        Assert.Equal("stop", change.RawPreference);
+        Assert.Equal("106540352242922", change.PhoneNumberId);
+        Assert.Equal("102290129340398", change.BusinessAccountId);
+        // A number here, unlike every timestamp on a message.
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1731705721), change.Timestamp);
+    }
+
+    [Fact]
+    public void A_conversation_expiry_that_cannot_be_read_is_absent_rather_than_year_one()
+    {
+        const string Body = """
+            {"object":"whatsapp_business_account","entry":[{"id":"W","changes":[{"field":"messages",
+             "value":{"messaging_product":"whatsapp",
+              "metadata":{"phone_number_id":"106540352242922"},
+              "statuses":[{"id":"wamid.A","status":"sent","timestamp":"1755000000",
+                           "recipient_id":"79000000001",
+                           "conversation":{"id":"c-1","expiration_timestamp":""}}]}}]}]}
+            """;
+
+        var status = Assert.IsType<MessageStatusChanged>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
+
+        // A caller comparing this against now to decide whether a free-form reply is still
+        // allowed would take DateTimeOffset.MinValue for a window that closed long ago.
+        Assert.Null(status.ConversationExpiresAt);
     }
 }

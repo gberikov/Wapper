@@ -17,6 +17,19 @@ have to think about Meta's rate limits.
 | `Wapper.AspNetCore` | A mapped webhook endpoint with signature verification and typed event dispatch. |
 | `Wapper.RateLimiting.Redis` | Shared limiter state, for when the application runs in more than one instance. |
 
+A runnable application showing the pieces below together — sending, receiving, downloading
+what arrives, and telling the errors apart — lives in [`samples/Wapper.Sample`](samples/Wapper.Sample).
+
+**Contents:** [Getting started](#getting-started) · [Sending a template](#sending-a-template-message) ·
+[Interactive messages](#interactive-messages) · [Media](#media) · [Receiving messages](#receiving-messages) ·
+[Rate limiting](#why-the-rate-limiting-matters) · [Errors](#errors) · [Managing templates](#managing-templates) ·
+[Phone numbers](#checking-the-phone-number) · [Registration](#getting-a-number-onto-the-cloud-api) ·
+[Business profile](#the-business-profile) · [Flows](#flows) · [Analytics](#analytics) ·
+[Several instances](#running-in-more-than-one-instance) · [Configuration](#configuration) ·
+[Logging and tracing](#logging-and-tracing) · [Testing](#testing-code-that-uses-wapper) ·
+[Uncovered endpoints](#calling-something-this-library-does-not-cover) ·
+[Not covered yet](#what-is-not-covered-yet)
+
 ## Getting started
 
 ```csharp
@@ -78,6 +91,108 @@ SaaS — replace the credential lookup instead:
 builder.Services.AddSingleton<IWhatsAppCredentialsProvider, MyTenantCredentials>();
 ```
 
+## Sending a template message
+
+The most common send, because it is the only one allowed once the 24-hour customer service
+window has closed. The values go in by component, matched to the placeholders the template
+declares:
+
+```csharp
+await whatsApp.Messages.SendTemplateAsync(
+    customer,
+    new TemplateMessage
+    {
+        Name = "order_confirmation",
+        Language = "en_US",
+        Components =
+        [
+            TemplateComponent.Body(
+                TemplateParameter.FromText("Pablo", name: "first_name"),
+                TemplateParameter.FromText("860198-230332", name: "order_number")),
+            TemplateComponent.UrlButton(0, "860198-230332"),
+        ],
+    },
+    callbackData: orderId,
+    cancellationToken: ct);
+```
+
+Leave `name:` out for a template with numbered placeholders, and keep the parameters in the
+order the placeholders appear. A media header takes the file the customer will actually see,
+per message — `TemplateParameter.FromImage(MediaSource.FromId(mediaId))` — where the template
+itself only ever held a sample. `FromMoney`, `FromDateTime`, `FromLocation` and
+`CopyCodeButton` cover the other placeholder kinds.
+
+A template that has not been approved, or whose parameters do not match, is rejected with
+one of the `132xxx` codes, and none of them is retried: see [Errors](#errors).
+
+## Interactive messages
+
+Buttons are above. Three is the most WhatsApp allows; a list carries up to ten choices:
+
+```csharp
+await whatsApp.Messages.SendListAsync(customer, new ListMessage
+{
+    Body = "When suits you?",
+    ButtonText = "Pick a slot",
+    Sections =
+    [
+        new ListSection
+        {
+            Title = "Tomorrow",
+            Rows =
+            [
+                new ListRow { Id = "slot:0900", Title = "09:00" },
+                new ListRow { Id = "slot:1400", Title = "14:00", Description = "Afternoon" },
+            ],
+        },
+    ],
+}, cancellationToken: ct);
+```
+
+What the customer taps comes back as an `InteractiveReply` carrying the `Id` you set. A
+`CallToActionMessage` renders a link as a button, and `SendLocationRequestAsync` asks the
+customer to share where they are — the answer arrives as a `LocationMessage`, exactly as an
+unprompted one would.
+
+## Media
+
+Upload first, then send by id. A link works too, but Meta fetches it at send time, so a slow
+host fails the send and the result is cached for ten minutes:
+
+```csharp
+await using var file = File.OpenRead("invoice.pdf");
+var mediaId = await whatsApp.Media.UploadAsync(file, "application/pdf", "invoice.pdf", ct);
+
+await whatsApp.Messages.SendDocumentAsync(
+    customer,
+    MediaSource.FromId(mediaId),
+    caption: "Your invoice",
+    fileName: "invoice-2026-08.pdf",
+    cancellationToken: ct);
+```
+
+The size limits Meta publishes — 5 MB for an image, 16 MB for audio and video, 100 MB for a
+document — are checked before a byte goes up. An uploaded id lives for 30 days.
+
+What a customer sends arrives as a `MediaMessage` carrying an id and nothing else. Fetch the
+bytes promptly — an id from a webhook expires after seven days — and dispose the result, which
+owns the connection:
+
+```csharp
+public sealed class Attachments(IWhatsAppClient whatsApp) : IWhatsAppEventHandler<MediaMessage>
+{
+    public async Task HandleAsync(MediaMessage message, CancellationToken ct)
+    {
+        await using var media = await whatsApp.Media.DownloadAsync(message.MediaId, ct);
+        await using var target = File.Create(Path.Combine("inbox", message.MediaId));
+        await media.Content.CopyToAsync(target, ct);
+    }
+}
+```
+
+A media download is the one call that leaves the Graph API host, so where it goes is checked
+before the token is attached: see [the last section](#a-few-things-the-client-refuses-to-do).
+
 ## Receiving messages
 
 ```csharp
@@ -115,6 +230,48 @@ trace rather than vanishing:
 builder.Services.AddWhatsAppWebhookHandler<Unhandled, UnknownEvent>();
 ```
 
+The same event is where a field this library *does* know lands when it arrives shaped in a
+way the library could not read, so a handler for it is the one place to learn that anything
+is being discarded.
+
+### Delivery statuses
+
+A send only says Meta accepted the message. Whether it was delivered — and why it was not —
+arrives afterwards as a `MessageStatusChanged`, with the `callbackData` the send attached:
+
+```csharp
+public sealed class Deliveries(IOrders orders) : IWhatsAppEventHandler<MessageStatusChanged>
+{
+    public Task HandleAsync(MessageStatusChanged status, CancellationToken ct) =>
+        status.Status switch
+        {
+            MessageDeliveryStatus.Delivered => orders.MarkNotifiedAsync(status.CallbackData!, ct),
+            MessageDeliveryStatus.Failed => orders.MarkUnreachableAsync(status.CallbackData!, status.Errors[0].Code, ct),
+            _ => Task.CompletedTask,
+        };
+}
+```
+
+`ConversationExpiresAt` is set on the status that opens a conversation and says when the
+24-hour customer service window closes. It is `null` when Meta did not say.
+
+### Customers opting out
+
+A `MarketingPreferenceChanged` with `MarketingPreference.Stop` means every marketing template
+to that customer will be accepted by the API and then fail on the status webhook with
+`131050`. It is the one webhook that changes what you are allowed to send, so record it and
+stop:
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<OptOuts, MarketingPreferenceChanged>();
+```
+
+### Without ASP.NET Core
+
+`WhatsAppWebhookSignature.IsValid` and `WhatsAppWebhookParser.Parse` are in the `Wapper`
+package and take the raw body, so an Azure Function or a queue consumer verifies and parses
+the same way; only the endpoint and the handler dispatch are ASP.NET Core's.
+
 Nothing arrives at all until the app is subscribed to the account — the step that is easy to
 forget and impossible to debug, because the endpoint looks perfectly healthy without it:
 
@@ -139,6 +296,30 @@ one could come from anyone.
 Meta expects a fast answer (median under 250 ms) and retries anything that fails for up to
 seven days, so put long work on a queue rather than in a handler.
 
+### Which fields to subscribe to
+
+Subscribing to the app is only half of it: each **webhook field** is switched on separately in
+the Meta app dashboard, under *WhatsApp → Configuration*. Subscribe to too few and the events
+never arrive; there is nothing in the API that says so, and the endpoint looks healthy either
+way.
+
+| Field | | Why |
+|---|---|---|
+| `messages` | **Required** | The only one that carries anything you send or receive: incoming messages, *and* every delivery status, *and* the out-of-band errors. Without it the endpoint receives nothing at all. |
+| `user_preferences` | **Strongly recommended** | Marketing opt-outs. Without it you keep sending marketing templates that are accepted and never delivered, which costs sends and drags the number's quality down. → `MarketingPreferenceChanged` |
+| `message_template_status_update` | If you manage templates | The outcome of review. Creating a template only ever returns `Pending`; approval or rejection arrives here, up to a day later, and nowhere else. → `TemplateStatusChanged` |
+| `phone_number_quality_update` | Recommended | Quality drops, messaging-limit changes, and the throughput upgrade that lets you raise `MessagesPerSecond` from 80 to 1000. → `PhoneNumberQualityChanged` |
+| `message_template_quality_update` | Recommended | The warning before a template is paused. → `TemplateQualityChanged` |
+| `flows` | If you use Flows | Status changes and the monitoring alerts that precede them. → `FlowStatusChanged`, `FlowAlert` |
+| `phone_number_name_update` | If display names change | An approved change is the cue to register the number again — without that the new name never takes effect. → `PhoneNumberNameChanged` |
+| `account_update` | Recommended | Policy violations, offboarding, deletion. Arrives as `UnknownEvent`, which is still better than finding out when sends start failing. |
+| `account_alerts`, `business_capability_update`, `message_template_components_update`, `template_category_update`, `security` | Optional | Useful to log; nothing here has to act on them. All arrive as `UnknownEvent`. |
+| `partner_solutions`, `history`, `smb_app_state_sync`, `smb_message_echoes`, `automatic_events`, `payment_configuration_update` | Solution Partners only | Only meaningful to an approved partner onboarding customers, or with a regional payments product. |
+
+The token also has to carry the right permissions, or a field can be subscribed and still stay
+silent: `whatsapp_business_messaging` for `messages`, and `whatsapp_business_management` for
+every other field.
+
 ## Why the rate limiting matters
 
 The Cloud API enforces four independent budgets, each with its own key and its
@@ -156,6 +337,45 @@ Wapper paces the first three proactively and backs off the fourth reactively,
 steering by the `X-App-Usage` and `X-Business-Use-Case-Usage` response headers.
 Backoff follows `4^X` seconds, the formula Meta publishes. The Cloud API does not
 send a `Retry-After` header, so nothing here depends on one.
+
+## Errors
+
+Everything the library raises derives from `WhatsAppException`:
+
+| Exception | When | Retry? |
+|---|---|---|
+| `WhatsAppApiException` | Meta answered with an error object. `Error.Code` is the only field worth branching on; the HTTP status is recorded for diagnostics and documented by Meta as unstable. | Already retried if it was worth it |
+| `WhatsAppRateLimitedException` | A budget was exhausted — either this client refused to wait longer than `MaxWait`, or Meta kept rejecting until the retries ran out. `Scope` says which budget, `RetryAfter` how long. | After `RetryAfter` |
+| `WhatsAppConfigurationException` | A missing token, an unknown tenant, a malformed setting. | No |
+| `WhatsAppException` | A timeout, a connection that never reached Meta, a response with no body. | Not automatically — nothing came back, so the message may have been accepted |
+| `ArgumentException` | Something Meta would have answered with a bare `100`, caught before the call: a fourth button, a 140-character About, a media id that is really a path. | No |
+
+By the time an `WhatsAppApiException` reaches you the retryable ones — throughput, pair and
+account limits, `is_transient` server errors — have been retried already. What is left is
+worth branching on:
+
+```csharp
+try
+{
+    await whatsApp.Messages.SendTextAsync(customer, text, cancellationToken: ct);
+}
+catch (WhatsAppApiException exception) when (exception.Code == WhatsAppErrorCodes.ReEngagementRequired)
+{
+    // The 24-hour window has closed. Only a template gets through now.
+    await whatsApp.Messages.SendTemplateAsync(customer, reminder, cancellationToken: ct);
+}
+catch (WhatsAppApiException exception) when (exception.Code == WhatsAppErrorCodes.UserOptedOut)
+{
+    await optOuts.RecordAsync(customer, ct);
+}
+catch (WhatsAppRateLimitedException exception)
+{
+    await queue.RetryAfterAsync(exception.RetryAfter, ct);
+}
+```
+
+`WhatsAppErrorCodes` names the codes the library acts on and the ones an application most
+often does. `Error.TraceId` is what to quote in a ticket to Meta.
 
 ## Managing templates
 
@@ -197,6 +417,27 @@ Managing templates needs `WhatsAppBusinessAccountId` in configuration; sending m
 not. These calls spend the account's management allowance (200 an hour, 5000 once a number is
 registered), which the client paces separately from message throughput.
 
+A template with an image, video or document header is reviewed against a sample, and the
+sample goes up through a different endpoint than the media a message carries. It hands back a
+*handle*, not a media id, and needs `WhatsApp:AppId`:
+
+```csharp
+await using var sample = File.OpenRead("hero.png");
+var handle = await whatsApp.Templates.UploadHeaderSampleAsync(sample, "image/png", ct);
+
+await whatsApp.Templates.CreateAsync(new Template
+{
+    Name = "seasonal_offer",
+    Language = "en_US",
+    Category = TemplateCategory.Marketing,
+    Header = TemplateHeader.FromImage(handle),
+    Body = new TemplateBody { Text = "Our summer range is in." },
+}, cancellationToken: ct);
+```
+
+Reading a template back — `GetAsync`, or `ListAsync` — asks for every field, including the
+quality score and the reason review turned it down, which Graph leaves out unless asked.
+
 ### One-time passcodes
 
 An authentication template carries no text of its own — Meta writes the body and the footer in
@@ -219,8 +460,8 @@ copying everywhere else, so it is always at least as good as `CopyOneTimePasswor
 signature hash wrong and the code silently never arrives — Meta matches on it deliberately, so
 a passcode cannot be autofilled into an impostor app.
 
-Not covered yet: carousel and limited-time-offer templates, catalogue and multi-product
-buttons, and archiving.
+Carousel and limited-time-offer templates, and catalogue buttons, are
+[not covered yet](#what-is-not-covered-yet).
 
 ## Checking the phone number
 
@@ -473,6 +714,149 @@ instance alone — Meta rejects the overshoot, which the retry path already hand
 than a Redis blip becoming a messaging outage. Set `FallBackToLocal = false` to make it
 fatal instead.
 
+## Configuration
+
+Everything under the `WhatsApp` section, or on `WhatsAppOptions` in code. Only the first two
+are needed to send; nothing is needed at all when an `IWhatsAppCredentialsProvider` supplies
+the credentials.
+
+| Setting | Default | What it is for |
+|---|---|---|
+| `AccessToken` | — | The bearer token. |
+| `PhoneNumberId` | — | The business phone number messages are sent from. |
+| `WhatsAppBusinessAccountId` | — | Templates, phone numbers, Flows, analytics and subscriptions. |
+| `AppId` | — | Uploading a business profile picture or a template header sample. Also keys the app-level rate limit, so several tenants on one app back off together. |
+| `AppSecret` | — | Verifying webhook signatures. Deliveries are refused without it. |
+| `WebhookVerifyToken` | — | Answering the subscription handshake. |
+| `GraphApiVersion` | `v26.0` | Moves forward — or stays put — without a new package. |
+| `BaseAddress` | `https://graph.facebook.com/` | A proxy or a test server. Must be https unless loopback. |
+| `Timeout` | 100 s | Per HTTP call. Does not include time spent waiting for a rate limit permit. |
+| `MediaDownloadHosts` | Meta's CDNs | The hosts a media download may present the token to. Configuration adds to the defaults. |
+| `RateLimits:Enabled` | `true` | Turn off only when something in front of the client paces already. |
+| `RateLimits:MessagesPerSecond` | 80 | Raise to 1000 once the number reports `ThroughputLevel.High`. |
+| `RateLimits:PairInterval` / `PairBurst` | 6 s / 45 | One message per recipient per six seconds, with a burst. |
+| `RateLimits:BusinessAccountRequestsPerHour` | 200 | 5000 once the account has a registered number. |
+| `RateLimits:MaxWait` | 30 s | The longest a call waits for a permit before `WhatsAppRateLimitedException`. |
+| `RateLimits:MaxRetries` | 4 | Spread over Meta's `4^X` seconds: 1, 4, 16 and 64. |
+| `RateLimits:UsagePercentThreshold` | 100 | Start holding back when `X-App-Usage` reports this much of the allowance spent. |
+
+Every setting is validated at startup, so a `Timeout` of zero or a `GraphApiVersion` of
+`latest` fails the host rather than the first send.
+
+## Logging and tracing
+
+Retries, and the holds put on a budget after Meta rejects a call, are logged through `ILogger`
+under the `Wapper` category — retries at `Information`, holds and usage-header warnings at
+`Warning`. A send that takes sixty seconds says why.
+
+Calls are also traced. One span covers the whole logical call, waits and retries included,
+because that is what the caller experienced; the individual HTTP attempts appear underneath it
+if the host instruments `HttpClient` as well.
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource(WhatsAppDiagnostics.ActivitySourceName)
+        .AddHttpClientInstrumentation());
+```
+
+Spans are named for the operation — `messages.send_template`, `templates.create`,
+`flows.publish` — never for an id, so they can be aggregated. They carry the tenant, the
+business phone number, and on failure the Cloud API's error code; a retried call also carries
+`wapper.attempts`. The recipient is deliberately absent: it is a customer's phone number, and
+a trace backend is not a place to put one.
+
+Nothing is emitted at all until something subscribes, so leaving this alone costs a null check
+per call.
+
+## Testing code that uses Wapper
+
+Everything the client exposes is an interface — `IWhatsAppClient`, `IMessagesApi`,
+`IMediaApi`, `ITemplatesApi` and the rest — and each resource group is registered in the
+container on its own, so a class that only sends can take `IMessagesApi` and be handed a fake.
+The event types are records with settable properties, built by hand in a test as easily as by
+the parser.
+
+Every delay in the library goes through `TimeProvider`, so a test that wants to see a retry
+registers a `FakeTimeProvider` and winds it forward instead of waiting sixty seconds.
+
+## Calling something this library does not cover
+
+An endpoint with no typed API is an inconvenience, not a wall. `Raw` sends anything the Cloud
+API accepts with the tenant's credentials, the configured version and base address, the four
+rate limit budgets, the retry policy and the same typed exceptions:
+
+```csharp
+var catalogues = await whatsApp.Raw.SendAsync(
+    new RawRequest
+    {
+        Method = HttpMethod.Get,
+        Path = "{waba_id}/product_catalogs",
+        Kind = RawCallKind.Management,
+        Operation = "catalogs.list",
+    },
+    ct);
+
+foreach (var catalogue in catalogues.GetProperty("data").EnumerateArray())
+{
+    logger.LogInformation("{Id}", catalogue.GetProperty("id").GetString());
+}
+```
+
+`{phone_number_id}`, `{waba_id}` and `{app_id}` are filled in from the tenant's credentials,
+so the same path works for every tenant of a multi-tenant host. `Kind` says which budget the
+call spends, so it is paced with everything else — this is the whole reason to use it rather
+than a second `HttpClient` beside this one, which would pace against nothing and walk both
+into Meta's limits.
+
+Pass a `JsonTypeInfo<T>` from a `JsonSerializerContext` of your own to read the response into
+a type instead of a `JsonElement`. It is asked for rather than inferred because these packages
+are trim- and AOT-compatible, and a reflection-based overload would quietly break both.
+
+Two things it does not do: it checks nothing before sending, so Meta's bare `100` is all you
+get back, and anything you interpolate into the path is yours to `Uri.EscapeDataString`. Prefer
+a typed API wherever one exists.
+
+## What is not covered yet
+
+The Cloud API is wide, and this release types the parts most applications reach for. Everything
+below is reachable through [`Raw`](#calling-something-this-library-does-not-cover) today; what
+is missing is the typed, validated, documented version.
+
+- **Commerce — catalogue, single- and multi-product messages.** The send half is easy; the
+  catalogue behind it is managed through Commerce Manager and the Marketing API rather than
+  anything WhatsApp-shaped, so typing the send alone would give you a message with nothing to
+  put in it. The order that comes back *is* typed, because it arrives whether or not you use
+  the API.
+- **Carousel and limited-time-offer templates.** A `Template` here is one header, one body,
+  one footer and one buttons block, which is what Meta allows everywhere else. A carousel is
+  an array of cards each with components of its own, and a limited-time offer adds an expiry
+  component plus parameters at send time. Both need a second shape of the model rather than
+  another property, and a template that gets it wrong is rejected at review a day later.
+- **Template library, archiving, and template groups.** Small and self-contained; simply not
+  reached yet.
+- **QR codes and short links, and conversational components** (ice breakers, commands, the
+  welcome message that `WelcomeRequest` answers). Also small, also just not reached yet.
+- **Blocking users.** A recent endpoint that is still moving; worth waiting for it to settle
+  rather than shipping a signature that changes.
+- **The Calling API.** Not a few endpoints — call permissions, SIP configuration, WebRTC
+  signalling, its own webhook field and its own error codes. It is a package of its own, and
+  bolting it onto `IMessagesApi` would be the wrong shape.
+- **Reading the WhatsApp Business Account itself** (`GET /{waba_id}`): name, currency,
+  timezone, verification and Marketing Messages Lite eligibility. Two dozen fields, most about
+  billing and partner ownership, and none of them needed to send a message — a one-line `Raw`
+  read serves the applications that want it.
+- **Partner-facing endpoints** — Embedded Signup, credit line sharing, `partner_solutions`,
+  `history`, the `smb_*` sync fields. These need advanced access granted through App Review to
+  an approved Solution Partner, so they cannot be exercised, let alone tested, without that
+  status.
+- **Webhook fields with no typed event** — `account_update`, `business_capability_update`,
+  `security` and the rest arrive as `UnknownEvent` carrying their body, so nothing is lost;
+  they are simply not modelled.
+
+If one of these is blocking you, open an issue naming it — `Raw` is meant to keep you moving,
+not to be the answer forever.
+
 ## A few things the client refuses to do
 
 The access token is a bearer token: it is worth exactly as much to whoever gets hold of it.
@@ -481,13 +865,20 @@ The access token is a bearer token: it is worth exactly as much to whoever gets 
   not need a certificate.
 - **A media download only ever goes to Meta's hosts.** A media URL is not a Graph API address —
   Meta returns a host of its own choosing, and the download needs the token attached — so
-  `MediaInfo.Url` is checked against `RateLimits`-style configuration (`MediaDownloadHosts`,
-  matched whole or on a label boundary) before the token goes anywhere near it. Add to that
-  list if Meta starts using a host this release does not know.
+  `MediaInfo.Url` is checked against `MediaDownloadHosts` (matched whole or on a label
+  boundary) before the token goes anywhere near it. Add to that list if Meta starts using a
+  host this release does not know.
+- **An identifier stays one path segment.** A media, template, Flow or phone number id a
+  caller hands in is data, and one shaped like `../123/message_templates?name=x` would
+  otherwise turn a media delete into a template delete under your own token. Anything with a
+  slash, a dot segment or a query character is refused before the call.
 - **`WhatsAppCredentials.ToString()` leaves the token out**, so logging one — or anything
   holding one — does not put a working token in the log.
-- **Rate limit exceptions redact the recipient's number**, keeping your own. `Scope.Key` still
-  has it in full for code that deliberately wants it.
+- **Rate limit exceptions, log lines and spans redact the recipient's number**, keeping your
+  own. `Scope.Key` still has it in full for code that deliberately wants it, and the Redis
+  limiter keys a conversation by a digest of it rather than the number itself.
+- **A request path stays under the Graph API version.** That holds for `Raw` too: a path that
+  climbs out of it — however it is spelled — is refused rather than sent somewhere else.
 - **A Flow's preview link is only fetched when asked for.** It needs no login and lasts thirty
   days: `Flows.GetAsync(id, includePreview: true, ...)`, or `GetPreviewAsync`.
 

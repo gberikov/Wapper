@@ -45,4 +45,7 @@ namespace Wapper.Internal;
 [JsonSerializable(typeof(BusinessEncryptionResponse))]
 [JsonSerializable(typeof(SuccessResponse))]
 [JsonSerializable(typeof(Dictionary<string, List<BusinessUseCaseUsage>>), TypeInfoPropertyName = "DictionaryStringListBusinessUseCaseUsage")]
+// What a raw call reads its response as when the caller brought no type of its own. The
+// converter clones, so the element outlives the response it was read from.
+[JsonSerializable(typeof(System.Text.Json.JsonElement))]
 internal sealed partial class WhatsAppJsonContext : JsonSerializerContext;

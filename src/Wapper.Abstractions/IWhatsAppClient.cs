@@ -5,6 +5,7 @@ using Wapper.Flows;
 using Wapper.Media;
 using Wapper.Messages;
 using Wapper.PhoneNumbers;
+using Wapper.Raw;
 using Wapper.Templates;
 
 namespace Wapper;
@@ -38,6 +39,12 @@ public interface IWhatsAppTenantClient
 
     /// <summary>What the account has been sending, and what it has been charged for.</summary>
     IAnalyticsApi Analytics { get; }
+
+    /// <summary>
+    /// The way out: an endpoint this library has no typed API for, sent with the same
+    /// credentials, pacing and retries as the rest.
+    /// </summary>
+    IRawApi Raw { get; }
 }
 
 /// <summary>

@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -103,12 +104,22 @@ public static class WhatsAppServiceCollectionExtensions
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().BusinessProfile);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Flows);
         services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Analytics);
+        services.TryAddSingleton(static provider => provider.GetRequiredService<IWhatsAppClient>().Raw);
 
         return services
             .AddHttpClient<GraphApiClient>(HttpClientName)
-            // Every tenant sets its own timeout, enforced per call. A timeout on the shared
-            // client would cap them all at whichever tenant was registered first.
-            .ConfigureHttpClient(static client => client.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigureHttpClient(static client =>
+            {
+                // Every tenant sets its own timeout, enforced per call. A timeout on the
+                // shared client would cap them all at whichever tenant was registered first.
+                client.Timeout = Timeout.InfiniteTimeSpan;
+
+                // Graph speaks HTTP/2, and a number sending a thousand messages a second is
+                // better off multiplexing them over a few connections than opening one per
+                // request. Negotiated, not demanded: a proxy that only speaks 1.1 still works.
+                client.DefaultRequestVersion = HttpVersion.Version20;
+                client.DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+            })
             // IWhatsAppClient is a singleton and holds this client for the life of the
             // process, so the factory never gets to hand it a rebuilt handler. Rotating the
             // connections inside the handler instead is what keeps a DNS change to

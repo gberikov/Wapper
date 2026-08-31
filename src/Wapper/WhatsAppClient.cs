@@ -7,6 +7,7 @@ using Wapper.Internal;
 using Wapper.Media;
 using Wapper.Messages;
 using Wapper.PhoneNumbers;
+using Wapper.Raw;
 using Wapper.Templates;
 
 namespace Wapper;
@@ -31,6 +32,8 @@ internal sealed class WhatsAppTenantClient(GraphApiClient client, string tenant)
     public IFlowsApi Flows { get; } = new FlowsApi(client, tenant);
 
     public IAnalyticsApi Analytics { get; } = new AnalyticsApi(client, tenant);
+
+    public IRawApi Raw { get; } = new RawApi(client, tenant);
 }
 
 /// <summary>
@@ -63,6 +66,8 @@ internal sealed class WhatsAppClient(GraphApiClient client) : IWhatsAppClient
     public IFlowsApi Flows => _default.Flows;
 
     public IAnalyticsApi Analytics => _default.Analytics;
+
+    public IRawApi Raw => _default.Raw;
 
     public IWhatsAppTenantClient For(string tenant)
     {

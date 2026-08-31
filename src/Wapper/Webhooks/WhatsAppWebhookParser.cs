@@ -96,10 +96,15 @@ public static class WhatsAppWebhookParser
                 CollectMessages(messages, businessAccountId, events);
                 return;
 
+            case "user_preferences" when Bind(value) is { } preferences:
+                CollectPreferences(preferences, businessAccountId, events);
+                return;
+
             default:
                 // Meta has more than twenty webhook fields and keeps adding to them. Dropping
-                // one leaves no trace of an account being offboarded or a customer opting out
-                // of marketing, so it is reported with the body it arrived in instead.
+                // one leaves no trace of an account being offboarded, so it is reported with
+                // the body it arrived in instead. A field this library does know but could
+                // not read lands here too, for the same reason: the alternative is silence.
                 events.Add(new UnknownEvent
                 {
                     BusinessAccountId = businessAccountId,
@@ -130,9 +135,46 @@ public static class WhatsAppWebhookParser
         }
         catch (JsonException)
         {
-            // A field this library knows, shaped in a way it does not. Better to report
-            // nothing for it than to fail the whole delivery.
+            // A field this library knows, shaped in a way it does not. Failing the whole
+            // delivery over it would cost the changes around it; the caller falls through to
+            // UnknownEvent, which keeps the body so nothing is lost without trace.
             return null;
+        }
+    }
+
+    private static void CollectPreferences(
+        WebhookValue value,
+        string businessAccountId,
+        List<WhatsAppEvent> events)
+    {
+        var phoneNumberId = value.Metadata?.PhoneNumberId ?? string.Empty;
+        var display = value.Metadata?.DisplayPhoneNumber;
+
+        foreach (var preference in value.UserPreferences ?? [])
+        {
+            if (preference.WaId is not { } customer)
+            {
+                continue;
+            }
+
+            events.Add(new MarketingPreferenceChanged
+            {
+                PhoneNumberId = phoneNumberId,
+                BusinessAccountId = businessAccountId,
+                DisplayPhoneNumber = display,
+                Timestamp = preference.Timestamp is { } seconds
+                    ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+                    : default,
+                WhatsAppId = customer,
+                Preference = preference.Value?.ToUpperInvariant() switch
+                {
+                    "STOP" => MarketingPreference.Stop,
+                    "RESUME" => MarketingPreference.Resume,
+                    _ => MarketingPreference.Unknown,
+                },
+                RawPreference = preference.Value,
+                Detail = preference.Detail,
+            });
         }
     }
 
@@ -487,9 +529,10 @@ public static class WhatsAppWebhookParser
             Billable = status.Pricing?.Billable,
             PricingType = status.Pricing?.Type,
             PricingModel = status.Pricing?.PricingModel,
-            ConversationExpiresAt = status.Conversation?.ExpirationTimestamp is { } expiry
-                ? ToTimestamp(expiry)
-                : null,
+            // Null when absent or unreadable, never the year-one default: a caller comparing
+            // it against now to decide whether a free-form reply is still allowed would take
+            // that for a window that closed long ago.
+            ConversationExpiresAt = TryTimestamp(status.Conversation?.ExpirationTimestamp),
             CallbackData = status.CallbackData,
             Errors = status.Errors is { Count: > 0 } errors
                 ? [.. errors.Select(e => e.ToError())]
@@ -558,9 +601,12 @@ public static class WhatsAppWebhookParser
     }
 
     private static DateTimeOffset ToTimestamp(string? timestamp) =>
+        TryTimestamp(timestamp) ?? default;
+
+    private static DateTimeOffset? TryTimestamp(string? timestamp) =>
         long.TryParse(timestamp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)
             ? DateTimeOffset.FromUnixTimeSeconds(seconds)
-            : default;
+            : null;
 
     private static Contact ToContact(ContactPayload payload) => new()
     {
