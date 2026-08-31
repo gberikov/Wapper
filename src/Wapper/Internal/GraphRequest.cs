@@ -55,4 +55,14 @@ internal sealed record GraphRequest
     /// conversation rather than per phone number.
     /// </summary>
     public string? Recipient { get; init; }
+
+    /// <summary>
+    /// Whether the call may be sent again after a retryable rejection.
+    /// </summary>
+    /// <remarks>
+    /// False for an upload whose source stream cannot be rewound: the first attempt has
+    /// already consumed it, so a second would send an empty file. The budget is still held
+    /// back on rejection, which is what protects the calls that follow.
+    /// </remarks>
+    public bool Retryable { get; init; } = true;
 }
