@@ -76,20 +76,26 @@ await whatsApp.Messages.SendTextAsync(customer, "on its way", callbackData: orde
 
 ### More than one phone number
 
-Register each one by name and ask for it by name:
+Name each one in configuration and ask for it by name:
+
+```jsonc
+{
+  "WhatsApp": {
+    "Tenants": {
+      "acme":   { "AccessToken": "...", "PhoneNumberId": "106540352242922" },
+      "globex": { "AccessToken": "...", "PhoneNumberId": "115540352242911" }
+    }
+  }
+}
+```
 
 ```csharp
-builder.Services.AddWhatsApp("acme", o => { o.AccessToken = "..."; o.PhoneNumberId = "..."; });
-
 await whatsApp.For("acme").Messages.SendTextAsync(customer, "hello", cancellationToken: ct);
 ```
 
-When the tokens live in a database rather than in configuration — the usual case for a
-SaaS — replace the credential lookup instead:
-
-```csharp
-builder.Services.AddSingleton<IWhatsAppCredentialsProvider, MyTenantCredentials>();
-```
+The same `AddWhatsApp(section)` call registers them. See [Configuration](#configuration) for
+what a tenant inherits, where the tokens should live, and what to do when they come from a
+database rather than a file.
 
 ## Sending a template message
 
@@ -716,9 +722,126 @@ fatal instead.
 
 ## Configuration
 
-Everything under the `WhatsApp` section, or on `WhatsAppOptions` in code. Only the first two
-are needed to send; nothing is needed at all when an `IWhatsAppCredentialsProvider` supplies
-the credentials.
+Everything lives under one `WhatsApp` section, and one call reads all of it:
+
+```csharp
+builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+```
+
+### One phone number
+
+Write the settings in the section. There is no tenant to name and nothing to enumerate.
+
+```jsonc
+{
+  "WhatsApp": {
+    "PhoneNumberId": "106540352242922",
+    "WhatsAppBusinessAccountId": "102290129340398",
+    "GraphApiVersion": "v26.0",
+    "RateLimits": { "MessagesPerSecond": 80 }
+  }
+}
+```
+
+```csharp
+await whatsApp.Messages.SendTextAsync(customer, "hello", cancellationToken: ct);
+```
+
+### Several phone numbers
+
+Add an entry under `Tenants` per number, keyed by the name you will ask for it by. **Each
+entry inherits everything set alongside it and overrides what it sets itself**, so the app
+secret, the API version and the limits are written once and only the credentials are repeated:
+
+```jsonc
+{
+  "WhatsApp": {
+    // Shared by every tenant below.
+    "WhatsAppBusinessAccountId": "102290129340398",
+    "GraphApiVersion": "v26.0",
+    "AppSecret": "...",
+    "WebhookVerifyToken": "...",
+    "RateLimits": { "MessagesPerSecond": 80 },
+
+    "Tenants": {
+      "acme": {
+        "PhoneNumberId": "106540352242922"
+      },
+      "globex": {
+        "PhoneNumberId": "115540352242911",
+        // This number has been upgraded and the other has not.
+        "RateLimits": { "MessagesPerSecond": 1000 }
+      }
+    }
+  }
+}
+```
+
+```csharp
+await whatsApp.For("acme").Messages.SendTextAsync(customer, "hello", cancellationToken: ct);
+```
+
+Three things worth knowing about the multi-tenant shape:
+
+- **The default tenant is still registered**, holding whatever sits outside `Tenants` — which
+  is what the webhook endpoint reads `AppSecret` and `WebhookVerifyToken` from. Leaving it
+  without an access token is deliberate: a forgotten `For(...)` then fails saying so, rather
+  than sending as whichever tenant happened to be first.
+- **One webhook endpoint per Meta app, not per number.** Numbers on one app share an app
+  secret, so `app.MapWhatsAppWebhook("/whatsapp")` is enough and each event carries its own
+  `PhoneNumberId`. Separate apps mean separate secrets, so put them in each tenant's section
+  and map one endpoint each: `app.MapWhatsAppWebhook("/whatsapp/acme", "acme")`.
+- **Credentials are not required in configuration.** A tenant listed here without an access
+  token is legal, because a SaaS supplies tokens from its own store; it fails on its first
+  call, naming itself. If that is your case, see [below](#credentials-from-somewhere-other-than-configuration).
+
+If you would rather have one shape whatever the number of tenants, a single entry under
+`Tenants` works exactly as well — it just costs naming the tenant on every call.
+
+### Where the tokens go
+
+An access token is worth exactly as much as the password it replaces, and `appsettings.json`
+is committed. Keep them out of it.
+
+In development, use user-secrets — they live in your profile, outside the repository:
+
+```bash
+cd samples/Wapper.Sample
+dotnet user-secrets init
+dotnet user-secrets set "WhatsApp:AccessToken" "EAAJB..."
+dotnet user-secrets set "WhatsApp:AppSecret" "..."
+```
+
+The keys are the same paths, so a tenant's token is one level deeper:
+
+```bash
+dotnet user-secrets set "WhatsApp:Tenants:acme:AccessToken" "EAAJB..."
+```
+
+`WebApplication.CreateBuilder` loads them automatically in the `Development` environment, and
+they override `appsettings.json` without appearing in it. They are **not encrypted** — plain
+JSON under `%APPDATA%\Microsoft\UserSecrets` (`~/.microsoft/usersecrets` elsewhere) — so they
+keep secrets out of source control, not off the machine.
+
+In production, the same keys come from environment variables, with `__` for `:`:
+
+```bash
+WhatsApp__AccessToken=EAAJB...
+WhatsApp__Tenants__acme__AccessToken=EAAJB...
+```
+
+or from a secret store — Key Vault, Secrets Manager, whichever — added as a configuration
+provider. Because tenants are keyed by name rather than by position, the key of a given
+tenant's token never changes when another tenant is added, renamed or removed.
+
+Tokens that expire, rotate, or live in your own database are not a configuration problem at
+all; see below.
+
+### Every setting
+
+Anything here can be set in the section, in a tenant's entry, or on `WhatsAppOptions` in code
+— and in that order of increasing precedence. Only `AccessToken` and `PhoneNumberId` are
+needed to send.
 
 | Setting | Default | What it is for |
 |---|---|---|
@@ -741,7 +864,46 @@ the credentials.
 | `RateLimits:UsagePercentThreshold` | 100 | Start holding back when `X-App-Usage` reports this much of the allowance spent. |
 
 Every setting is validated at startup, so a `Timeout` of zero or a `GraphApiVersion` of
-`latest` fails the host rather than the first send.
+`latest` fails the host rather than the first send. Credentials are the exception, and
+deliberately: demanding them in configuration would make the arrangement below impossible.
+
+### Credentials from somewhere other than configuration
+
+A configuration section is a fixed list, written at deploy time. A SaaS onboarding accounts
+through Embedded Signup does not have one — tenants appear while the process is running, and
+their tokens expire and rotate. Replace the credential lookup instead:
+
+```csharp
+builder.Services.AddWhatsApp(builder.Configuration.GetSection("WhatsApp"));
+builder.Services.AddSingleton<IWhatsAppCredentialsProvider, TenantCredentials>();
+```
+
+```csharp
+public sealed class TenantCredentials(IMemoryCache cache, ITenantStore store)
+    : IWhatsAppCredentialsProvider
+{
+    // Called on every request, so anything talking to a database caches.
+    public async ValueTask<WhatsAppCredentials> GetCredentialsAsync(string tenant, CancellationToken ct) =>
+        await cache.GetOrCreateAsync($"wa:{tenant}", async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
+
+            var row = await store.FindAsync(tenant, ct)
+                ?? throw new WhatsAppConfigurationException($"No WhatsApp account is onboarded for '{tenant}'.");
+
+            return new WhatsAppCredentials
+            {
+                AccessToken = row.AccessToken,
+                PhoneNumberId = row.PhoneNumberId,
+                WhatsAppBusinessAccountId = row.BusinessAccountId,
+            };
+        }) ?? throw new WhatsAppConfigurationException($"No credentials for '{tenant}'.");
+}
+```
+
+`For("anything")` then works without the tenant having been registered at startup — the
+per-tenant clients are built lazily and cached. The `WhatsApp` section still supplies
+everything that is not a credential: the API version, the limits, the webhook secrets.
 
 ## Logging and tracing
 
