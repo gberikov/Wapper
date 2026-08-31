@@ -6,6 +6,7 @@
     <Project Path="src/Wapper/Wapper.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Wapper.RateLimiting.Redis.Tests/Wapper.RateLimiting.Redis.Tests.csproj" />
     <Project Path="tests/Wapper.Tests/Wapper.Tests.csproj" />
   </Folder>
 </Solution>

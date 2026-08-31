@@ -13,6 +13,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Wapper.Tests" />
+    <!-- The Redis limiter falls back to the in-process one when Redis cannot be reached. -->
+    <InternalsVisibleTo Include="Wapper.RateLimiting.Redis" />
+    <InternalsVisibleTo Include="Wapper.RateLimiting.Redis.Tests" />
   </ItemGroup>
 
   <ItemGroup>
