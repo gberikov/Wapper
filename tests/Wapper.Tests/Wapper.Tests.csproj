@@ -9,4 +9,11 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The README is packed into every package, where it is rendered away from the
+         repository and a relative link resolves to nothing. Copied here so a test can
+         hold that line. -->
+    <None Include="../../README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
