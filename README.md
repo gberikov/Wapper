@@ -26,7 +26,9 @@ what arrives, and telling the errors apart — lives in [`samples/Wapper.Sample`
 [Phone numbers](#checking-the-phone-number) · [Registration](#getting-a-number-onto-the-cloud-api) ·
 [Business profile](#the-business-profile) · [Flows](#flows) · [Analytics](#analytics) ·
 [Several instances](#running-in-more-than-one-instance) · [Configuration](#configuration) ·
-[Testing](#testing-code-that-uses-wapper) · [Not covered yet](#what-is-not-covered-yet)
+[Logging and tracing](#logging-and-tracing) · [Testing](#testing-code-that-uses-wapper) ·
+[Uncovered endpoints](#calling-something-this-library-does-not-cover) ·
+[Not covered yet](#what-is-not-covered-yet)
 
 ## Getting started
 
@@ -88,13 +90,6 @@ SaaS — replace the credential lookup instead:
 ```csharp
 builder.Services.AddSingleton<IWhatsAppCredentialsProvider, MyTenantCredentials>();
 ```
-
-### What the client says about itself
-
-Retries, and the holds it puts on a budget after Meta rejects a call, are logged through
-`ILogger` under the `Wapper` category — retries at `Information`, holds at `Warning`. A send
-that takes sixty seconds is not silent about why. Nothing logged carries a customer's number
-in full.
 
 ## Sending a template message
 
@@ -300,6 +295,30 @@ one could come from anyone.
 
 Meta expects a fast answer (median under 250 ms) and retries anything that fails for up to
 seven days, so put long work on a queue rather than in a handler.
+
+### Which fields to subscribe to
+
+Subscribing to the app is only half of it: each **webhook field** is switched on separately in
+the Meta app dashboard, under *WhatsApp → Configuration*. Subscribe to too few and the events
+never arrive; there is nothing in the API that says so, and the endpoint looks healthy either
+way.
+
+| Field | | Why |
+|---|---|---|
+| `messages` | **Required** | The only one that carries anything you send or receive: incoming messages, *and* every delivery status, *and* the out-of-band errors. Without it the endpoint receives nothing at all. |
+| `user_preferences` | **Strongly recommended** | Marketing opt-outs. Without it you keep sending marketing templates that are accepted and never delivered, which costs sends and drags the number's quality down. → `MarketingPreferenceChanged` |
+| `message_template_status_update` | If you manage templates | The outcome of review. Creating a template only ever returns `Pending`; approval or rejection arrives here, up to a day later, and nowhere else. → `TemplateStatusChanged` |
+| `phone_number_quality_update` | Recommended | Quality drops, messaging-limit changes, and the throughput upgrade that lets you raise `MessagesPerSecond` from 80 to 1000. → `PhoneNumberQualityChanged` |
+| `message_template_quality_update` | Recommended | The warning before a template is paused. → `TemplateQualityChanged` |
+| `flows` | If you use Flows | Status changes and the monitoring alerts that precede them. → `FlowStatusChanged`, `FlowAlert` |
+| `phone_number_name_update` | If display names change | An approved change is the cue to register the number again — without that the new name never takes effect. → `PhoneNumberNameChanged` |
+| `account_update` | Recommended | Policy violations, offboarding, deletion. Arrives as `UnknownEvent`, which is still better than finding out when sends start failing. |
+| `account_alerts`, `business_capability_update`, `message_template_components_update`, `template_category_update`, `security` | Optional | Useful to log; nothing here has to act on them. All arrive as `UnknownEvent`. |
+| `partner_solutions`, `history`, `smb_app_state_sync`, `smb_message_echoes`, `automatic_events`, `payment_configuration_update` | Solution Partners only | Only meaningful to an approved partner onboarding customers, or with a regional payments product. |
+
+The token also has to carry the right permissions, or a field can be subscribed and still stay
+silent: `whatsapp_business_messaging` for `messages`, and `whatsapp_business_management` for
+every other field.
 
 ## Why the rate limiting matters
 
@@ -724,6 +743,32 @@ the credentials.
 Every setting is validated at startup, so a `Timeout` of zero or a `GraphApiVersion` of
 `latest` fails the host rather than the first send.
 
+## Logging and tracing
+
+Retries, and the holds put on a budget after Meta rejects a call, are logged through `ILogger`
+under the `Wapper` category — retries at `Information`, holds and usage-header warnings at
+`Warning`. A send that takes sixty seconds says why.
+
+Calls are also traced. One span covers the whole logical call, waits and retries included,
+because that is what the caller experienced; the individual HTTP attempts appear underneath it
+if the host instruments `HttpClient` as well.
+
+```csharp
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing => tracing
+        .AddSource(WhatsAppDiagnostics.ActivitySourceName)
+        .AddHttpClientInstrumentation());
+```
+
+Spans are named for the operation — `messages.send_template`, `templates.create`,
+`flows.publish` — never for an id, so they can be aggregated. They carry the tenant, the
+business phone number, and on failure the Cloud API's error code; a retried call also carries
+`wapper.attempts`. The recipient is deliberately absent: it is a customer's phone number, and
+a trace backend is not a place to put one.
+
+Nothing is emitted at all until something subscribes, so leaving this alone costs a null check
+per call.
+
 ## Testing code that uses Wapper
 
 Everything the client exposes is an interface — `IWhatsAppClient`, `IMessagesApi`,
@@ -735,24 +780,82 @@ the parser.
 Every delay in the library goes through `TimeProvider`, so a test that wants to see a retry
 registers a `FakeTimeProvider` and winds it forward instead of waiting sixty seconds.
 
+## Calling something this library does not cover
+
+An endpoint with no typed API is an inconvenience, not a wall. `Raw` sends anything the Cloud
+API accepts with the tenant's credentials, the configured version and base address, the four
+rate limit budgets, the retry policy and the same typed exceptions:
+
+```csharp
+var catalogues = await whatsApp.Raw.SendAsync(
+    new RawRequest
+    {
+        Method = HttpMethod.Get,
+        Path = "{waba_id}/product_catalogs",
+        Kind = RawCallKind.Management,
+        Operation = "catalogs.list",
+    },
+    ct);
+
+foreach (var catalogue in catalogues.GetProperty("data").EnumerateArray())
+{
+    logger.LogInformation("{Id}", catalogue.GetProperty("id").GetString());
+}
+```
+
+`{phone_number_id}`, `{waba_id}` and `{app_id}` are filled in from the tenant's credentials,
+so the same path works for every tenant of a multi-tenant host. `Kind` says which budget the
+call spends, so it is paced with everything else — this is the whole reason to use it rather
+than a second `HttpClient` beside this one, which would pace against nothing and walk both
+into Meta's limits.
+
+Pass a `JsonTypeInfo<T>` from a `JsonSerializerContext` of your own to read the response into
+a type instead of a `JsonElement`. It is asked for rather than inferred because these packages
+are trim- and AOT-compatible, and a reflection-based overload would quietly break both.
+
+Two things it does not do: it checks nothing before sending, so Meta's bare `100` is all you
+get back, and anything you interpolate into the path is yours to `Uri.EscapeDataString`. Prefer
+a typed API wherever one exists.
+
 ## What is not covered yet
 
-The Cloud API is wide, and this release types the parts most applications reach for. Not yet:
+The Cloud API is wide, and this release types the parts most applications reach for. Everything
+below is reachable through [`Raw`](#calling-something-this-library-does-not-cover) today; what
+is missing is the typed, validated, documented version.
 
-- **Commerce:** catalogue, single- and multi-product messages, and the order webhook is
-  typed but the catalogue itself is not managed.
-- **Templates:** carousel and limited-time-offer components, catalogue and Flow buttons,
-  archiving, and the template library.
-- **Phone numbers:** QR codes and short links, conversational components (ice breakers,
-  commands, the welcome message that `WelcomeRequest` answers), blocking users, and the
-  Calling API.
-- **The account:** reading the WABA itself (name, currency, review status), credit lines,
-  and the partner-facing endpoints.
-- **Webhooks:** `account_update`, `business_capability_update`, `security` and the rest
-  arrive as `UnknownEvent` with their body, rather than as typed events.
+- **Commerce — catalogue, single- and multi-product messages.** The send half is easy; the
+  catalogue behind it is managed through Commerce Manager and the Marketing API rather than
+  anything WhatsApp-shaped, so typing the send alone would give you a message with nothing to
+  put in it. The order that comes back *is* typed, because it arrives whether or not you use
+  the API.
+- **Carousel and limited-time-offer templates.** A `Template` here is one header, one body,
+  one footer and one buttons block, which is what Meta allows everywhere else. A carousel is
+  an array of cards each with components of its own, and a limited-time offer adds an expiry
+  component plus parameters at send time. Both need a second shape of the model rather than
+  another property, and a template that gets it wrong is rejected at review a day later.
+- **Template library, archiving, and template groups.** Small and self-contained; simply not
+  reached yet.
+- **QR codes and short links, and conversational components** (ice breakers, commands, the
+  welcome message that `WelcomeRequest` answers). Also small, also just not reached yet.
+- **Blocking users.** A recent endpoint that is still moving; worth waiting for it to settle
+  rather than shipping a signature that changes.
+- **The Calling API.** Not a few endpoints — call permissions, SIP configuration, WebRTC
+  signalling, its own webhook field and its own error codes. It is a package of its own, and
+  bolting it onto `IMessagesApi` would be the wrong shape.
+- **Reading the WhatsApp Business Account itself** (`GET /{waba_id}`): name, currency,
+  timezone, verification and Marketing Messages Lite eligibility. Two dozen fields, most about
+  billing and partner ownership, and none of them needed to send a message — a one-line `Raw`
+  read serves the applications that want it.
+- **Partner-facing endpoints** — Embedded Signup, credit line sharing, `partner_solutions`,
+  `history`, the `smb_*` sync fields. These need advanced access granted through App Review to
+  an approved Solution Partner, so they cannot be exercised, let alone tested, without that
+  status.
+- **Webhook fields with no typed event** — `account_update`, `business_capability_update`,
+  `security` and the rest arrive as `UnknownEvent` carrying their body, so nothing is lost;
+  they are simply not modelled.
 
-There is no raw escape hatch for an endpoint the library does not model yet; open an issue
-naming the one you need.
+If one of these is blocking you, open an issue naming it — `Raw` is meant to keep you moving,
+not to be the answer forever.
 
 ## A few things the client refuses to do
 
@@ -771,9 +874,11 @@ The access token is a bearer token: it is worth exactly as much to whoever gets 
   slash, a dot segment or a query character is refused before the call.
 - **`WhatsAppCredentials.ToString()` leaves the token out**, so logging one — or anything
   holding one — does not put a working token in the log.
-- **Rate limit exceptions and log lines redact the recipient's number**, keeping your own.
-  `Scope.Key` still has it in full for code that deliberately wants it, and the Redis limiter
-  keys a conversation by a digest of it rather than the number itself.
+- **Rate limit exceptions, log lines and spans redact the recipient's number**, keeping your
+  own. `Scope.Key` still has it in full for code that deliberately wants it, and the Redis
+  limiter keys a conversation by a digest of it rather than the number itself.
+- **A request path stays under the Graph API version.** That holds for `Raw` too: a path that
+  climbs out of it — however it is spelled — is refused rather than sent somewhere else.
 - **A Flow's preview link is only fetched when asked for.** It needs no login and lasts thirty
   days: `Flows.GetAsync(id, includePreview: true, ...)`, or `GetPreviewAsync`.
 

@@ -2,6 +2,7 @@ using Wapper;
 using Wapper.AspNetCore;
 using Wapper.Media;
 using Wapper.Messages;
+using Wapper.Raw;
 using Wapper.Sample;
 using Wapper.Webhooks;
 
@@ -90,5 +91,25 @@ app.MapPost("/send/document", async (SendDocument request, IWhatsAppClient whats
 app.MapPost("/send/location-request", (SendText request, IWhatsAppClient whatsApp, CancellationToken ct) =>
     Outbound.SendAsync(
         () => whatsApp.Messages.SendLocationRequestAsync(request.To, request.Text, cancellationToken: ct)));
+
+// Reading the WhatsApp Business Account itself is one of the things this library has no typed
+// API for. Raw sends it anyway, with the same credentials, pacing, retries and exceptions --
+// which is the point: a missing endpoint should not mean a second HttpClient beside this one,
+// pacing against nothing.
+app.MapGet("/account", async (IWhatsAppClient whatsApp, CancellationToken ct) =>
+{
+    var account = await whatsApp.Raw.SendAsync(
+        new RawRequest
+        {
+            Method = HttpMethod.Get,
+            // Filled in from the tenant's credentials, so this works for every tenant.
+            Path = "{waba_id}?fields=name,currency,timezone_id,business_verification_status",
+            Kind = RawCallKind.Management,
+            Operation = "account.get",
+        },
+        ct);
+
+    return Results.Json(account);
+});
 
 app.Run();
