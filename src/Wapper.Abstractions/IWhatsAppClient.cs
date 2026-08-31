@@ -1,5 +1,6 @@
 using Wapper.Media;
 using Wapper.Messages;
+using Wapper.PhoneNumbers;
 using Wapper.Templates;
 
 namespace Wapper;
@@ -18,6 +19,9 @@ public interface IWhatsAppTenantClient
 
     /// <summary>Creating, reading, editing and deleting message templates.</summary>
     ITemplatesApi Templates { get; }
+
+    /// <summary>Reading the business phone numbers of the account.</summary>
+    IPhoneNumbersApi PhoneNumbers { get; }
 }
 
 /// <summary>

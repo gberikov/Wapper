@@ -77,6 +77,34 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("new_quality_score")]
     public string? NewQualityScore { get; set; }
+
+    // Phone number events. Account-level like the template ones, and identified by the number
+    // in display form: there is no phone number id anywhere in the payload.
+
+    [JsonPropertyName("display_phone_number")]
+    public string? DisplayPhoneNumber { get; set; }
+
+    /// <summary>
+    /// Superseded by <see cref="MaxDailyConversationsPerBusiness"/>, which Meta introduced as
+    /// its replacement.
+    /// </summary>
+    [JsonPropertyName("current_limit")]
+    public string? CurrentLimit { get; set; }
+
+    [JsonPropertyName("old_limit")]
+    public string? OldLimit { get; set; }
+
+    [JsonPropertyName("max_daily_conversations_per_business")]
+    public string? MaxDailyConversationsPerBusiness { get; set; }
+
+    [JsonPropertyName("decision")]
+    public string? Decision { get; set; }
+
+    [JsonPropertyName("requested_verified_name")]
+    public string? RequestedVerifiedName { get; set; }
+
+    [JsonPropertyName("rejection_reason")]
+    public string? RejectionReason { get; set; }
 }
 
 internal sealed class WebhookOtherInfo

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Wapper.Internal;
 using Wapper.Messages;
+using Wapper.PhoneNumbers;
 using Wapper.Templates;
 
 namespace Wapper.Webhooks;
@@ -64,8 +65,8 @@ public static class WhatsAppWebhookParser
         string businessAccountId,
         List<WhatsAppEvent> events)
     {
-        // Template events belong to the account rather than to a number and carry no
-        // metadata at all, so they are read before a phone number is insisted on.
+        // Template and phone number events belong to the account rather than to a number and
+        // carry no metadata at all, so they are read before a phone number is insisted on.
         switch (field)
         {
             case "message_template_status_update":
@@ -74,6 +75,14 @@ public static class WhatsAppWebhookParser
 
             case "message_template_quality_update":
                 events.Add(ToQualityChange(value, businessAccountId));
+                return;
+
+            case "phone_number_quality_update":
+                events.Add(ToPhoneNumberQualityChange(value, businessAccountId));
+                return;
+
+            case "phone_number_name_update":
+                events.Add(ToPhoneNumberNameChange(value, businessAccountId));
                 return;
 
             default:
@@ -139,6 +148,66 @@ public static class WhatsAppWebhookParser
         TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
         Previous = ParseQuality(value.PreviousQualityScore),
         Current = ParseQuality(value.NewQualityScore),
+    };
+
+    private static PhoneNumberQualityChanged ToPhoneNumberQualityChange(
+        WebhookValue value,
+        string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        DisplayPhoneNumber = value.DisplayPhoneNumber,
+        Event = ParsePhoneNumberEvent(value.Event),
+        RawEvent = value.Event,
+        PreviousLimit = PhoneNumberMapping.ParseTier(value.OldLimit),
+        // `max_daily_conversations_per_business` replaced `current_limit`, which Meta retired
+        // in February 2026. Older deliveries and some intermediaries still send the old one.
+        CurrentLimit = PhoneNumberMapping.ParseTier(
+            value.MaxDailyConversationsPerBusiness ?? value.CurrentLimit),
+    };
+
+    private static PhoneNumberNameChanged ToPhoneNumberNameChange(
+        WebhookValue value,
+        string businessAccountId) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        DisplayPhoneNumber = value.DisplayPhoneNumber,
+        Decision = ParseDecision(value.Decision),
+        RawDecision = value.Decision,
+        RequestedName = value.RequestedVerifiedName,
+        RejectionReason = ParseRejection(value.RejectionReason),
+        RawRejectionReason = value.RejectionReason,
+    };
+
+    private static PhoneNumberQualityEvent ParsePhoneNumberEvent(string? name) => name?.ToUpperInvariant() switch
+    {
+        "ONBOARDING" => PhoneNumberQualityEvent.Onboarding,
+        "FLAGGED" => PhoneNumberQualityEvent.Flagged,
+        "UNFLAGGED" => PhoneNumberQualityEvent.Unflagged,
+        "UPGRADE" => PhoneNumberQualityEvent.Upgrade,
+        "DOWNGRADE" => PhoneNumberQualityEvent.Downgrade,
+        "THROUGHPUT_UPGRADE" => PhoneNumberQualityEvent.ThroughputUpgrade,
+        _ => PhoneNumberQualityEvent.Unknown,
+    };
+
+    private static DisplayNameDecision ParseDecision(string? decision) => decision?.ToUpperInvariant() switch
+    {
+        "APPROVED" => DisplayNameDecision.Approved,
+        "DEFERRED" => DisplayNameDecision.Deferred,
+        "PENDING" => DisplayNameDecision.Pending,
+        "REJECTED" => DisplayNameDecision.Rejected,
+        _ => DisplayNameDecision.Unknown,
+    };
+
+    private static DisplayNameRejectionReason ParseRejection(string? reason) => reason?.ToUpperInvariant() switch
+    {
+        // Absent, or the literal string "NONE", both meaning the name was accepted.
+        null or "NONE" => DisplayNameRejectionReason.None,
+        // Meta documents these two identically: the name named a person.
+        "NAME_EMPLOYEE_ISSUE" or "NAME_INDIVIDUAL_ISSUE" => DisplayNameRejectionReason.PersonalName,
+        "NAME_ENDCLIENT_NOTRELATED" => DisplayNameRejectionReason.UnrelatedBusiness,
+        "NAME_FORMAT_UNACCEPTABLE" => DisplayNameRejectionReason.UnacceptableFormat,
+        "NAME_NOT_CONSISTENT" => DisplayNameRejectionReason.InconsistentWithBranding,
+        _ => DisplayNameRejectionReason.Unknown,
     };
 
     private static TemplateStatusChangeReason ParseReason(string? reason) => reason?.ToUpperInvariant() switch

@@ -198,26 +198,7 @@ internal sealed class TemplateListResponse
     public List<TemplateDefinitionPayload>? Data { get; set; }
 
     [JsonPropertyName("paging")]
-    public TemplatePagingPayload? Paging { get; set; }
-}
-
-internal sealed class TemplatePagingPayload
-{
-    [JsonPropertyName("cursors")]
-    public TemplateCursorsPayload? Cursors { get; set; }
-
-    /// <summary>
-    /// Absent on the last page. Meta signals the end by leaving this out rather than by
-    /// sending an empty cursor, which it still sends.
-    /// </summary>
-    [JsonPropertyName("next")]
-    public string? Next { get; set; }
-}
-
-internal sealed class TemplateCursorsPayload
-{
-    [JsonPropertyName("after")]
-    public string? After { get; set; }
+    public GraphPagingPayload? Paging { get; set; }
 }
 
 /// <summary>Wire shape of the response to submitting a template.</summary>
