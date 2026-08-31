@@ -26,8 +26,9 @@ A small ASP.NET Core backend showing the parts of Wapper most applications reach
 2. `dotnet run`, and expose the app on a public https URL (a tunnel is fine while developing).
 3. In the Meta app dashboard, point the WhatsApp webhook at `https://<host>/whatsapp` with the
    verify token from step 1, and subscribe to the webhook fields. `messages` is the only one
-   this sample cannot work without; `user_preferences` is what the opt-out handler needs. The
-   root README lists the rest and says which are worth switching on.
+   this sample cannot work without; `user_preferences` is what the opt-out handler needs.
+   [`docs/webhooks.md`](../../docs/webhooks.md) lists the rest and says which are worth
+   switching on.
 4. `POST /subscribe` once, so the account's webhooks reach this app at all.
 
 Then:
@@ -48,5 +49,6 @@ GET /account
 ```
 
 The template endpoint assumes an approved `order_confirmation` template with named
-`{{first_name}}` and `{{order_number}}` placeholders; the README at the repository root shows
-how to create one. `GET /account` needs `WhatsAppBusinessAccountId`.
+`{{first_name}}` and `{{order_number}}` placeholders;
+[`docs/templates.md`](../../docs/templates.md) shows how to create one. `GET /account` needs
+`WhatsAppBusinessAccountId`.
