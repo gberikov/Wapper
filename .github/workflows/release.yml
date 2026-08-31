@@ -1,0 +1,56 @@
+name: release
+
+on:
+  push:
+    tags:
+      # Bare SemVer tags only. MinVer reads the version straight off the tag,
+      # so there is no version number anywhere else in the repository.
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      # Required so nuget.org can verify who is publishing.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v5
+
+      - name: Build
+        run: dotnet build Wapper.slnx --configuration Release
+
+      - name: Test
+        run: dotnet test --solution Wapper.slnx --configuration Release --no-build
+
+      - name: Pack
+        run: dotnet pack Wapper.slnx --configuration Release --no-build --output artifacts
+
+      # Requested immediately before the push: the key it returns lives about an hour.
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push packages
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

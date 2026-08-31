@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Wapper.Abstractions/Wapper.Abstractions.csproj" />
+    <Project Path="src/Wapper.AspNetCore/Wapper.AspNetCore.csproj" />
+    <Project Path="src/Wapper.RateLimiting.Redis/Wapper.RateLimiting.Redis.csproj" />
+    <Project Path="src/Wapper/Wapper.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Wapper.Tests/Wapper.Tests.csproj" />
+  </Folder>
+</Solution>

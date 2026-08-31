@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Contracts, models and webhook payload types for the WhatsApp Cloud API. Referenced by Wapper and by anything that wants the types without the client.</Description>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,25 @@
+<Project>
+
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- xUnit v3 builds test projects as executables; without this the build fails
+         with "test projects must be executable". -->
+    <OutputType>Exe</OutputType>
+    <!-- IDE0005 (unused usings) only runs on build when the documentation file is
+         generated. Tests are not a public API, so the missing-XML-comment warning
+         that comes with it is switched back off. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- The run mode is set repository-wide in global.json (Microsoft.Testing.Platform).
+       A test project added on VSTest would make `dotnet test` refuse to run the whole
+       set, not just itself, so the wiring lives here instead of in each csproj. -->
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+
+</Project>

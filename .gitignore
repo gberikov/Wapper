@@ -1,0 +1,38 @@
+# Local, machine-specific agent instructions
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Build output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+*.binlog
+
+# Test output
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+coverage*.info
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!packages/build/
+
+# User-specific and IDE files
+*.user
+*.suo
+*.userprefs
+*.sln.DotSettings.user
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
