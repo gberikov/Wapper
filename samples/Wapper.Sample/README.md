@@ -10,9 +10,19 @@ A small ASP.NET Core backend showing the parts of Wapper most applications reach
 
 ## Running it
 
-1. Fill in `appsettings.json`, or set `WhatsApp__AccessToken`, `WhatsApp__PhoneNumberId`,
-   `WhatsApp__AppSecret` and `WhatsApp__WebhookVerifyToken` in the environment.
-   `WhatsAppBusinessAccountId` is only needed for `POST /subscribe`.
+1. Put the ids in `appsettings.json` and the secrets in user-secrets, which live outside the
+   repository and are loaded automatically in development:
+
+   ```bash
+   dotnet user-secrets init
+   dotnet user-secrets set "WhatsApp:AccessToken" "EAAJB..."
+   dotnet user-secrets set "WhatsApp:AppSecret" "..."
+   dotnet user-secrets set "WhatsApp:WebhookVerifyToken" "..."
+   ```
+
+   The same keys work as environment variables with `__` for `:`, which is how they are
+   supplied anywhere that is not a developer's machine. `WhatsAppBusinessAccountId` is only
+   needed for `POST /subscribe` and `GET /account`.
 2. `dotnet run`, and expose the app on a public https URL (a tunnel is fine while developing).
 3. In the Meta app dashboard, point the WhatsApp webhook at `https://<host>/whatsapp` with the
    verify token from step 1, and subscribe to the webhook fields. `messages` is the only one

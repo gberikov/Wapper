@@ -224,6 +224,195 @@ public class ConfigurationBindingTests
     }
 
     [Fact]
+    public void One_phone_number_needs_nothing_but_the_section()
+    {
+        // The single-tenant case has to stay this small: no tenant to name, nothing to
+        // enumerate, one call.
+        var options = Bind(new Dictionary<string, string?>
+        {
+            ["WhatsApp:AccessToken"] = "the-token",
+            ["WhatsApp:PhoneNumberId"] = "106540352242922",
+        });
+
+        var @default = options.Get(WhatsAppTenant.Default);
+        Assert.Equal("the-token", @default.AccessToken);
+        Assert.Equal("106540352242922", @default.PhoneNumberId);
+    }
+
+    [Fact]
+    public void Every_entry_under_Tenants_is_registered_under_its_own_name()
+    {
+        var options = Bind(new Dictionary<string, string?>
+        {
+            ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+            ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+            ["WhatsApp:Tenants:globex:AccessToken"] = "globex-token",
+            ["WhatsApp:Tenants:globex:PhoneNumberId"] = "222",
+        });
+
+        Assert.Equal("acme-token", options.Get("acme").AccessToken);
+        Assert.Equal("111", options.Get("acme").PhoneNumberId);
+        Assert.Equal("globex-token", options.Get("globex").AccessToken);
+        Assert.Equal("222", options.Get("globex").PhoneNumberId);
+    }
+
+    [Fact]
+    public void A_tenant_inherits_what_is_set_alongside_it()
+    {
+        // Otherwise the app secret and the API version would have to be repeated per tenant,
+        // and the copy that drifts is the one nobody notices.
+        var options = Bind(new Dictionary<string, string?>
+        {
+            ["WhatsApp:GraphApiVersion"] = "v27.0",
+            ["WhatsApp:AppSecret"] = "shared-secret",
+            ["WhatsApp:RateLimits:MessagesPerSecond"] = "1000",
+            ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+            ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+        });
+
+        var acme = options.Get("acme");
+        Assert.Equal("v27.0", acme.GraphApiVersion);
+        Assert.Equal("shared-secret", acme.AppSecret);
+        Assert.Equal(1000, acme.RateLimits.MessagesPerSecond);
+    }
+
+    [Fact]
+    public void What_a_tenant_sets_itself_wins_over_what_it_inherits()
+    {
+        var options = Bind(new Dictionary<string, string?>
+        {
+            ["WhatsApp:GraphApiVersion"] = "v26.0",
+            ["WhatsApp:RateLimits:MessagesPerSecond"] = "80",
+            ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+            ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+            ["WhatsApp:Tenants:globex:AccessToken"] = "globex-token",
+            ["WhatsApp:Tenants:globex:PhoneNumberId"] = "222",
+            // This number has been upgraded and the other has not.
+            ["WhatsApp:Tenants:globex:RateLimits:MessagesPerSecond"] = "1000",
+            ["WhatsApp:Tenants:globex:GraphApiVersion"] = "v27.0",
+        });
+
+        Assert.Equal(80, options.Get("acme").RateLimits.MessagesPerSecond);
+        Assert.Equal("v26.0", options.Get("acme").GraphApiVersion);
+
+        Assert.Equal(1000, options.Get("globex").RateLimits.MessagesPerSecond);
+        Assert.Equal("v27.0", options.Get("globex").GraphApiVersion);
+    }
+
+    [Fact]
+    public void The_default_tenant_keeps_the_webhook_secrets_and_no_credentials()
+    {
+        // One webhook endpoint serves every number of one Meta app, and it reads the app
+        // secret from the default tenant. Leaving that tenant without a token is the point:
+        // a forgotten For(...) then fails loudly instead of sending as somebody else.
+        var options = Bind(new Dictionary<string, string?>
+        {
+            ["WhatsApp:AppSecret"] = "shared-secret",
+            ["WhatsApp:WebhookVerifyToken"] = "shared-verify",
+            ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+            ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+        });
+
+        var @default = options.Get(WhatsAppTenant.Default);
+        Assert.Equal("shared-secret", @default.AppSecret);
+        Assert.Equal("shared-verify", @default.WebhookVerifyToken);
+        Assert.Null(@default.AccessToken);
+    }
+
+    [Fact]
+    public void A_single_tenant_may_still_be_written_as_one_entry_under_Tenants()
+    {
+        // For anyone who would rather have one shape whatever the number of tenants. It costs
+        // naming the tenant on every call, which is why it is not what the quickstart shows.
+        var options = Bind(new Dictionary<string, string?>
+        {
+            ["WhatsApp:Tenants:main:AccessToken"] = "the-token",
+            ["WhatsApp:Tenants:main:PhoneNumberId"] = "106540352242922",
+        });
+
+        Assert.Equal("the-token", options.Get("main").AccessToken);
+    }
+
+    [Fact]
+    public void Code_configuration_wins_over_every_tenant_it_registered()
+    {
+        var services = new ServiceCollection();
+        services.AddWhatsApp(
+            Configuration(new Dictionary<string, string?>
+            {
+                ["WhatsApp:GraphApiVersion"] = "v23.0",
+                ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+                ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+                ["WhatsApp:Tenants:acme:GraphApiVersion"] = "v24.0",
+            }).GetSection(WhatsAppOptions.SectionName),
+            options => options.GraphApiVersion = "v26.0");
+
+        var monitor = services.BuildServiceProvider().GetRequiredService<IOptionsMonitor<WhatsAppOptions>>();
+
+        Assert.Equal("v26.0", monitor.Get(WhatsAppTenant.Default).GraphApiVersion);
+        Assert.Equal("v26.0", monitor.Get("acme").GraphApiVersion);
+    }
+
+    [Fact]
+    public async Task Credentials_are_resolved_per_tenant_from_one_section()
+    {
+        var services = new ServiceCollection();
+        services.AddWhatsApp(
+            Configuration(new Dictionary<string, string?>
+            {
+                ["WhatsApp:WhatsAppBusinessAccountId"] = "shared-waba",
+                ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+                ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+                ["WhatsApp:Tenants:globex:AccessToken"] = "globex-token",
+                ["WhatsApp:Tenants:globex:PhoneNumberId"] = "222",
+            }).GetSection(WhatsAppOptions.SectionName));
+
+        var provider = services.BuildServiceProvider().GetRequiredService<IWhatsAppCredentialsProvider>();
+
+        var acme = await provider.GetCredentialsAsync("acme", TestContext.Current.CancellationToken);
+        var globex = await provider.GetCredentialsAsync("globex", TestContext.Current.CancellationToken);
+
+        Assert.Equal("acme-token", acme.AccessToken);
+        Assert.Equal("111", acme.PhoneNumberId);
+        // Inherited, because both numbers hang off the same account.
+        Assert.Equal("shared-waba", acme.WhatsAppBusinessAccountId);
+
+        Assert.Equal("globex-token", globex.AccessToken);
+        Assert.Equal("222", globex.PhoneNumberId);
+    }
+
+    [Fact]
+    public async Task Sending_through_a_tenant_that_configuration_never_named_says_so()
+    {
+        var services = new ServiceCollection();
+        services.AddWhatsApp(
+            Configuration(new Dictionary<string, string?>
+            {
+                ["WhatsApp:Tenants:acme:AccessToken"] = "acme-token",
+                ["WhatsApp:Tenants:acme:PhoneNumberId"] = "111",
+            }).GetSection(WhatsAppOptions.SectionName));
+
+        var provider = services.BuildServiceProvider().GetRequiredService<IWhatsAppCredentialsProvider>();
+
+        var exception = await Assert.ThrowsAsync<WhatsAppConfigurationException>(async () =>
+            await provider.GetCredentialsAsync("typo", TestContext.Current.CancellationToken));
+
+        // Names the tenant, so a misspelled key in appsettings is one line to find.
+        Assert.Contains("typo", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static IOptionsMonitor<WhatsAppOptions> Bind(Dictionary<string, string?> settings)
+    {
+        var services = new ServiceCollection();
+        services.AddWhatsApp(Configuration(settings).GetSection(WhatsAppOptions.SectionName));
+
+        return services.BuildServiceProvider().GetRequiredService<IOptionsMonitor<WhatsAppOptions>>();
+    }
+
+    private static IConfigurationRoot Configuration(Dictionary<string, string?> settings) =>
+        new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+
+    [Fact]
     public void Code_configuration_wins_over_the_bound_values()
     {
         var configuration = new ConfigurationBuilder()

@@ -14,7 +14,7 @@ public static class WhatsAppServiceCollectionExtensions
     /// <summary>Name of the <see cref="HttpClient"/> the client sends through.</summary>
     public const string HttpClientName = "Wapper";
 
-    /// <summary>Registers the default tenant.</summary>
+    /// <summary>Registers the default tenant, configured in code.</summary>
     /// <returns>
     /// The <see cref="IHttpClientBuilder"/> of the underlying client, so handlers and
     /// policies can be chained onto it.
@@ -24,14 +24,57 @@ public static class WhatsAppServiceCollectionExtensions
         Action<WhatsAppOptions>? configure = null) =>
         services.AddWhatsApp(WhatsAppTenant.Default, configure);
 
-    /// <summary>Registers the default tenant, bound from a configuration section.</summary>
+    /// <summary>
+    /// Registers every tenant the configuration section describes.
+    /// </summary>
+    /// <param name="services">The container.</param>
+    /// <param name="configuration">
+    /// The <c>WhatsApp</c> section. What it sets directly configures the default tenant; a
+    /// <see cref="WhatsAppOptions.TenantsSectionName"/> child registers one named tenant per
+    /// entry, keyed by the name <c>IWhatsAppClient.For(tenant)</c> takes.
+    /// </param>
+    /// <param name="configure">
+    /// Runs for every tenant registered here, after the configuration is bound, so it wins
+    /// over both. For settings that differ per tenant, put them in that tenant's section.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// An application with one business phone number writes its settings in the section and
+    /// stops; there is nothing else to do and no tenant to name. One with several adds a
+    /// <c>Tenants</c> entry each, and every entry inherits what is set alongside it — so the
+    /// app secret, the Graph API version and the rate limits are written once and only the
+    /// credentials are repeated.
+    /// </para>
+    /// <para>
+    /// The default tenant is registered either way. In a multi-tenant host that is what the
+    /// webhook endpoint reads its <see cref="WhatsAppOptions.AppSecret"/> and
+    /// <see cref="WhatsAppOptions.WebhookVerifyToken"/> from, and it deliberately has no
+    /// credentials of its own: sending through it then fails saying so, rather than sending
+    /// as whichever tenant happened to be first.
+    /// </para>
+    /// </remarks>
     public static IHttpClientBuilder AddWhatsApp(
         this IServiceCollection services,
         IConfiguration configuration,
-        Action<WhatsAppOptions>? configure = null) =>
-        services.AddWhatsApp(WhatsAppTenant.Default, configuration, configure);
+        Action<WhatsAppOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
 
-    /// <summary>Registers a named tenant.</summary>
+        Register(services, WhatsAppTenant.Default, shared: null, own: configuration, configure);
+
+        foreach (var tenant in configuration.GetSection(WhatsAppOptions.TenantsSectionName).GetChildren())
+        {
+            // Bound twice: the shared section first, then the tenant's own over the top of
+            // it. Without that a version or a limit set for everybody would silently apply to
+            // the default tenant alone, which is the one nobody sends through.
+            Register(services, tenant.Key, shared: configuration, own: tenant, configure);
+        }
+
+        return services.AddWhatsAppCore();
+    }
+
+    /// <summary>Registers a named tenant, configured in code.</summary>
     /// <param name="services">The container.</param>
     /// <param name="tenant">
     /// Tenant name, passed later to <c>IWhatsAppClient.For(tenant)</c>. Use
@@ -46,18 +89,18 @@ public static class WhatsAppServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(tenant);
 
-        var options = services.AddOptions<WhatsAppOptions>(tenant);
-        if (configure is not null)
-        {
-            options.Configure(configure);
-        }
-
-        options.ValidateOnStart();
+        Register(services, tenant, shared: null, own: null, configure);
 
         return services.AddWhatsAppCore();
     }
 
-    /// <summary>Registers a named tenant, bound from a configuration section.</summary>
+    /// <summary>
+    /// Registers one named tenant from one configuration section.
+    /// </summary>
+    /// <remarks>
+    /// The section is the tenant's own, and nothing is inherited from around it. Use the
+    /// overload without a name to read a whole <c>WhatsApp</c> section, tenants and all.
+    /// </remarks>
     public static IHttpClientBuilder AddWhatsApp(
         this IServiceCollection services,
         string tenant,
@@ -68,15 +111,43 @@ public static class WhatsAppServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(tenant);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var options = services.AddOptions<WhatsAppOptions>(tenant).Bind(configuration);
+        Register(services, tenant, shared: null, own: configuration, configure);
+
+        return services.AddWhatsAppCore();
+    }
+
+    /// <summary>
+    /// Binds one tenant's options: the shared section, then its own, then the code.
+    /// </summary>
+    /// <remarks>
+    /// Order is the whole point. Configuration binding leaves alone what a source does not
+    /// set, so each layer overrides only what it mentions.
+    /// </remarks>
+    private static void Register(
+        IServiceCollection services,
+        string tenant,
+        IConfiguration? shared,
+        IConfiguration? own,
+        Action<WhatsAppOptions>? configure)
+    {
+        var options = services.AddOptions<WhatsAppOptions>(tenant);
+
+        if (shared is not null)
+        {
+            options.Bind(shared);
+        }
+
+        if (own is not null)
+        {
+            options.Bind(own);
+        }
+
         if (configure is not null)
         {
             options.Configure(configure);
         }
 
         options.ValidateOnStart();
-
-        return services.AddWhatsAppCore();
     }
 
     private static IHttpClientBuilder AddWhatsAppCore(this IServiceCollection services)

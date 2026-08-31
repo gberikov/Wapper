@@ -11,6 +11,15 @@ public sealed class WhatsAppOptions
     /// <summary>Configuration section these options are bound from by convention.</summary>
     public const string SectionName = "WhatsApp";
 
+    /// <summary>
+    /// Child section holding one entry per named tenant, keyed by tenant name.
+    /// </summary>
+    /// <remarks>
+    /// Each entry inherits everything set alongside it in <see cref="SectionName"/> and
+    /// overrides what it sets itself, so settings shared by every tenant are written once.
+    /// </remarks>
+    public const string TenantsSectionName = "Tenants";
+
     /// <summary>Access token presented as a bearer token.</summary>
     /// <remarks>
     /// Leave empty when a custom <see cref="IWhatsAppCredentialsProvider"/> supplies
