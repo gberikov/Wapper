@@ -1,3 +1,4 @@
+using Wapper.Analytics;
 using Wapper.BusinessProfiles;
 using Wapper.Flows;
 using Wapper.Media;
@@ -30,6 +31,9 @@ public interface IWhatsAppTenantClient
 
     /// <summary>Building, publishing and retiring Flows.</summary>
     IFlowsApi Flows { get; }
+
+    /// <summary>What the account has been sending, and what it has been charged for.</summary>
+    IAnalyticsApi Analytics { get; }
 }
 
 /// <summary>
