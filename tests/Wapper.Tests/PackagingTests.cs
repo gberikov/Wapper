@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-using Xunit;
 
 namespace Wapper.Tests;
 
