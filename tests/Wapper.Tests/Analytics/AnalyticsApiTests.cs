@@ -484,6 +484,68 @@ public class AnalyticsApiTests
         Assert.Contains("WhatsAppBusinessAccountId", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Template_analytics_follows_the_cursor_until_the_platform_stops_offering_one()
+    {
+        // An ordinary edge, so it pages like one. Stopping after the first page would
+        // quietly understate every figure — the numbers look plausible and nothing says a
+        // second page existed.
+        var handler = StubHttpMessageHandler.Sequence(
+            (HttpStatusCode.OK, """
+                {"data":[{"granularity":"DAILY","product_type":"CLOUD_API",
+                  "data_points":[{"template_id":"1","start":1543543200,"end":1543629600,"sent":10}]}],
+                 "paging":{"cursors":{"after":"CURSOR"},"next":"https://graph.facebook.com/next"}}
+                """),
+            (HttpStatusCode.OK, """
+                {"data":[{"granularity":"DAILY",
+                  "data_points":[{"template_id":"1","start":1543629600,"end":1543716000,"sent":7}]}],
+                 "paging":{"cursors":{"after":"CURSOR"}}}
+                """));
+        var analytics = CreateWith(handler, Credentials);
+
+        var result = await analytics.GetTemplatesAsync(
+            new TemplateAnalyticsQuery { Start = Start, End = End, TemplateIds = ["1"] },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, result.DataPoints.Count);
+        Assert.Equal([10, 7], result.DataPoints.Select(p => p.Sent));
+        Assert.Equal("DAILY", result.Granularity);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains(
+            "after=CURSOR",
+            handler.Requests[1].RequestUri!.Query,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_conversation_breakdown_this_library_does_not_know_is_kept_raw()
+    {
+        var (analytics, _) = Create("""
+            {"conversation_analytics":{"data":[{"data_points":[
+              {"start":1543543200,"end":1543629600,"conversation":5,
+               "conversation_category":"MARKETING_LITE","conversation_type":"SPONSORED",
+               "conversation_direction":"UNKNOWN"}]}]}}
+            """);
+
+        var result = await analytics.GetConversationsAsync(
+            new ConversationAnalyticsQuery
+            {
+                Start = Start,
+                End = End,
+                Granularity = AnalyticsGranularity.Day,
+            },
+            TestContext.Current.CancellationToken);
+
+        var point = Assert.Single(result.DataPoints);
+        // Meta keeps adding to these lists, and without the raw string a billing report can
+        // only ever write down "Unknown".
+        Assert.Equal(ConversationCategory.Unknown, point.Category);
+        Assert.Equal("MARKETING_LITE", point.RawCategory);
+        Assert.Equal(ConversationType.Unknown, point.Type);
+        Assert.Equal("SPONSORED", point.RawType);
+        Assert.Equal("UNKNOWN", point.RawDirection);
+    }
+
     private static (IAnalyticsApi Analytics, StubHttpMessageHandler Handler) Create(string response)
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, response);

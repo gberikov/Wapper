@@ -117,6 +117,61 @@ public class InteractiveLimitTests
         Assert.Contains("has 11", thrown.Message, StringComparison.Ordinal);
     }
 
+    private static CallToActionMessage CallToAction(
+        string body = "Tap below",
+        string buttonText = "See dates",
+        string? header = null,
+        string? footer = null) =>
+        new()
+        {
+            Body = body,
+            ButtonText = buttonText,
+            Url = new Uri("https://example.com/dates"),
+            Header = header is null ? null : InteractiveHeader.FromText(header),
+            Footer = footer,
+        };
+
+    public static TheoryData<string, int, CallToActionMessage> OversizedCallToActionFields() => new()
+    {
+        { "body", 1024, CallToAction(body: new string('b', 1025)) },
+        { "label", 20, CallToAction(buttonText: new string('l', 21)) },
+        { "text header", 60, CallToAction(header: new string('h', 61)) },
+        { "footer", 60, CallToAction(footer: new string('f', 61)) },
+    };
+
+    [Theory]
+    [MemberData(nameof(OversizedCallToActionFields))]
+    public void An_oversized_call_to_action_field_is_named_and_measured(
+        string field,
+        int max,
+        CallToActionMessage message)
+    {
+        // The same documented limits as the other interactive types, previously checked for
+        // buttons and lists alone — the same bare 100 from Meta either way.
+        var thrown = Assert.Throws<ArgumentException>(() => message.ToPayload());
+
+        Assert.Contains(field, thrown.Message, StringComparison.Ordinal);
+        Assert.Contains($"at most {max} characters", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_oversized_flow_body_is_named_and_measured()
+    {
+        var message = new FlowMessage
+        {
+            FlowId = "1",
+            FlowToken = "token",
+            ButtonText = "Book",
+            Body = new string('b', 1025),
+            Screen = "BOOK",
+        };
+
+        var thrown = Assert.Throws<ArgumentException>(() => message.ToPayload());
+
+        Assert.Contains("Flow message", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("at most 1024 characters", thrown.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_message_at_every_limit_is_accepted()
     {

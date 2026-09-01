@@ -389,11 +389,20 @@ public sealed record ConversationDataPoint
     /// <summary>What it was charged as, when broken down by category.</summary>
     public ConversationCategory Category { get; init; }
 
+    /// <summary>The category exactly as Meta wrote it. Meta keeps adding to this list.</summary>
+    public string? RawCategory { get; init; }
+
     /// <summary>Whether it was billable, when broken down by type.</summary>
     public ConversationType Type { get; init; }
 
+    /// <summary>The type exactly as Meta wrote it.</summary>
+    public string? RawType { get; init; }
+
     /// <summary>Who started it, when broken down by direction.</summary>
     public ConversationDirection Direction { get; init; }
+
+    /// <summary>The direction exactly as Meta wrote it.</summary>
+    public string? RawDirection { get; init; }
 }
 
 /// <summary>Conversations over a range.</summary>
@@ -438,6 +447,9 @@ public sealed record PricingDataPoint
 
     /// <summary>Whether the messages were billable.</summary>
     public PricingType Type { get; init; }
+
+    /// <summary>The type exactly as Meta wrote it.</summary>
+    public string? RawType { get; init; }
 }
 
 /// <summary>Delivered messages and what they were charged at, over a range.</summary>

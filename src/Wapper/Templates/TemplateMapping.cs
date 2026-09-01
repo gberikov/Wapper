@@ -29,6 +29,19 @@ internal static class TemplateMapping
     {
         ArgumentNullException.ThrowIfNull(template);
 
+        if (template.UnknownComponents.Count > 0)
+        {
+            // Components are replaced wholesale, not merged. Writing this template back
+            // without the components this library cannot model would silently erase them at
+            // Meta — a carousel losing its whole card deck over a typo fix in the body.
+            throw new ArgumentException(
+                "This template carries components this library has no typed form for " +
+                $"({string.Join(", ", template.UnknownComponents)}). An edit replaces the " +
+                "components wholesale, so writing it back would erase them at Meta. Edit it " +
+                "in WhatsApp Manager, or through Raw.",
+                nameof(template));
+        }
+
         var components = new List<TemplateComponentDefinitionPayload>(4);
 
         if (template.Header is { } header)
@@ -81,6 +94,7 @@ internal static class TemplateMapping
         string? footer = null;
         int? codeExpiration = null;
         IReadOnlyList<TemplateButton> buttons = [];
+        List<string>? unknown = null;
 
         foreach (var component in payload.Components ?? [])
         {
@@ -109,8 +123,10 @@ internal static class TemplateMapping
                     break;
 
                 default:
-                    // Meta adds component types without warning. Losing one is better than
-                    // failing to read the whole template because of it.
+                    // Meta adds component types without warning. Failing the whole read over
+                    // one would take the listing with it, so the component is recorded by its
+                    // type instead — which is also what stops an edit erasing it unseen.
+                    (unknown ??= []).Add(component.Type ?? "(untyped)");
                     break;
             }
         }
@@ -136,8 +152,10 @@ internal static class TemplateMapping
                 ? TimeSpan.FromSeconds(seconds)
                 : null,
             QualityScore = ParseQuality(payload.QualityScore?.Score),
+            RawQualityScore = payload.QualityScore?.Score,
             RejectedReason = payload.RejectedReason,
             PreviousCategory = ParseCategory(payload.PreviousCategory),
+            UnknownComponents = unknown ?? [],
         };
     }
 

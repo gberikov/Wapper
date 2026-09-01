@@ -68,9 +68,15 @@ public static class WhatsAppWebhookParser
 
         foreach (var entry in payload.Entry)
         {
+            // The only timestamp an account-level change carries. Messages and statuses
+            // bring their own and use this one merely as a fallback.
+            var entryTime = entry.Time is { } seconds
+                ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+                : default;
+
             foreach (var change in entry.Changes ?? [])
             {
-                Collect(change.Field, change.Value, entry.Id ?? string.Empty, events);
+                Collect(change.Field, change.Value, entry.Id ?? string.Empty, entryTime, events);
             }
         }
 
@@ -255,6 +261,7 @@ public static class WhatsAppWebhookParser
         string? field,
         JsonElement value,
         string businessAccountId,
+        DateTimeOffset entryTime,
         List<WhatsAppEvent> events)
     {
         var before = events.Count;
@@ -265,39 +272,39 @@ public static class WhatsAppWebhookParser
         switch (field)
         {
             case "message_template_status_update" when Bind(value) is { } status:
-                events.Add(ToStatusChange(status, businessAccountId));
+                events.Add(ToStatusChange(status, businessAccountId, entryTime));
                 break;
 
             case "message_template_quality_update" when Bind(value) is { } quality:
-                events.Add(ToQualityChange(quality, businessAccountId));
+                events.Add(ToQualityChange(quality, businessAccountId, entryTime));
                 break;
 
             case "phone_number_quality_update" when Bind(value) is { } numberQuality:
-                events.Add(ToPhoneNumberQualityChange(numberQuality, businessAccountId));
+                events.Add(ToPhoneNumberQualityChange(numberQuality, businessAccountId, entryTime));
                 break;
 
             case "phone_number_name_update" when Bind(value) is { } name:
-                events.Add(ToPhoneNumberNameChange(name, businessAccountId));
+                events.Add(ToPhoneNumberNameChange(name, businessAccountId, entryTime));
                 break;
 
             case "account_update" when Bind(value) is { } account:
-                events.Add(ToAccountUpdate(account, value, businessAccountId));
+                events.Add(ToAccountUpdate(account, value, businessAccountId, entryTime));
                 break;
 
             // One field carries both the status changes and the monitoring alerts, told apart
             // by `event`.
             case "flows" when Bind(value) is { } flow:
                 events.Add(flow.Event == "FLOW_STATUS_CHANGE"
-                    ? ToFlowStatusChange(flow, businessAccountId)
-                    : ToFlowAlert(flow, businessAccountId));
+                    ? ToFlowStatusChange(flow, businessAccountId, entryTime)
+                    : ToFlowAlert(flow, businessAccountId, entryTime));
                 break;
 
             case "messages" when Bind(value) is { } messages:
-                CollectMessages(messages, value, businessAccountId, events);
+                CollectMessages(messages, value, businessAccountId, entryTime, events);
                 break;
 
             case "user_preferences" when Bind(value) is { } preferences:
-                CollectPreferences(preferences, value, businessAccountId, events);
+                CollectPreferences(preferences, value, businessAccountId, entryTime, events);
                 break;
 
             default:
@@ -306,7 +313,7 @@ public static class WhatsAppWebhookParser
                 // it is reported with the body it arrived in instead. A field this library
                 // does know but could not read lands here too, for the same reason: the
                 // alternative is silence.
-                events.Add(Unreadable(field, value, businessAccountId));
+                events.Add(Unreadable(field, value, businessAccountId, entryTime));
                 break;
         }
 
@@ -316,7 +323,7 @@ public static class WhatsAppWebhookParser
             // but found no event in. Silence here is the worst of the failure modes, because
             // there is nowhere left to notice it, so it is reported like any other change
             // that could not be turned into an event.
-            events.Add(Unreadable(field, value, businessAccountId));
+            events.Add(Unreadable(field, value, businessAccountId, entryTime));
         }
     }
 
@@ -324,9 +331,14 @@ public static class WhatsAppWebhookParser
     /// Reports a change this library could not turn into an event, with the body it arrived
     /// in.
     /// </summary>
-    private static UnknownEvent Unreadable(string? field, JsonElement value, string businessAccountId) => new()
+    private static UnknownEvent Unreadable(
+        string? field,
+        JsonElement value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         Field = field ?? string.Empty,
         Json = value.ValueKind == JsonValueKind.Undefined ? string.Empty : value.GetRawText(),
     };
@@ -362,6 +374,7 @@ public static class WhatsAppWebhookParser
         WebhookValue value,
         JsonElement raw,
         string businessAccountId,
+        DateTimeOffset entryTime,
         List<WhatsAppEvent> events)
     {
         var phoneNumberId = value.Metadata?.PhoneNumberId ?? string.Empty;
@@ -388,7 +401,7 @@ public static class WhatsAppWebhookParser
             {
                 // Neither shape carried a customer. Reported rather than skipped: an opt-out
                 // that goes missing costs sends to somebody who asked for none.
-                events.Add(Unreadable("user_preferences", raw, businessAccountId));
+                events.Add(Unreadable("user_preferences", raw, businessAccountId, entryTime));
                 continue;
             }
 
@@ -399,7 +412,7 @@ public static class WhatsAppWebhookParser
                 DisplayPhoneNumber = display,
                 Timestamp = preference.Timestamp is { } seconds
                     ? DateTimeOffset.FromUnixTimeSeconds(seconds)
-                    : default,
+                    : entryTime,
                 WhatsAppId = customer,
                 Preference = preference.Value?.ToUpperInvariant() switch
                 {
@@ -418,6 +431,7 @@ public static class WhatsAppWebhookParser
         WebhookValue value,
         JsonElement raw,
         string businessAccountId,
+        DateTimeOffset entryTime,
         List<WhatsAppEvent> events)
     {
         // The phone number is the only identifier this payload carries, and without it there
@@ -428,7 +442,7 @@ public static class WhatsAppWebhookParser
         var phoneNumberId = value.Metadata?.PhoneNumberId;
         if (string.IsNullOrEmpty(phoneNumberId))
         {
-            events.Add(Unreadable("messages", raw, businessAccountId));
+            events.Add(Unreadable("messages", raw, businessAccountId, entryTime));
             return;
         }
 
@@ -440,15 +454,15 @@ public static class WhatsAppWebhookParser
         foreach (var message in value.Messages ?? [])
         {
             events.Add(
-                ToEvent(message, value, phoneNumberId, display, businessAccountId)
-                ?? Unreadable("messages", raw, businessAccountId));
+                ToEvent(message, value, phoneNumberId, display, businessAccountId, entryTime)
+                ?? Unreadable("messages", raw, businessAccountId, entryTime));
         }
 
         foreach (var status in value.Statuses ?? [])
         {
             events.Add(
-                ToEvent(status, phoneNumberId, display, businessAccountId)
-                ?? Unreadable("messages", raw, businessAccountId));
+                ToEvent(status, phoneNumberId, display, businessAccountId, entryTime)
+                ?? Unreadable("messages", raw, businessAccountId, entryTime));
         }
 
         foreach (var error in value.Errors ?? [])
@@ -458,14 +472,19 @@ public static class WhatsAppWebhookParser
                 PhoneNumberId = phoneNumberId,
                 BusinessAccountId = businessAccountId,
                 DisplayPhoneNumber = display,
+                Timestamp = entryTime,
                 Error = error.ToError(),
             });
         }
     }
 
-    private static TemplateStatusChanged ToStatusChange(WebhookValue value, string businessAccountId) => new()
+    private static TemplateStatusChanged ToStatusChange(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
         TemplateName = value.MessageTemplateName ?? string.Empty,
         TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
@@ -475,17 +494,27 @@ public static class WhatsAppWebhookParser
         RawReason = value.Reason,
         // A rejection puts the part a human needs in `rejection_info`, not in `other_info`.
         // Reading only the latter leaves an operator with a bare INVALID_FORMAT and no idea
-        // what to change.
-        Details = value.OtherInfo?.Description
-            ?? value.OtherInfo?.Title
-            ?? value.RejectionInfo?.Reason,
+        // what to change — and when Meta fills in both, both are kept.
+        Details = Join(
+            value.OtherInfo?.Description ?? value.OtherInfo?.Title,
+            value.RejectionInfo?.Reason),
         Recommendation = value.RejectionInfo?.Recommendation,
+    };
+
+    /// <summary>Both sentences when Meta sent both, either alone otherwise.</summary>
+    private static string? Join(string? first, string? second) => (first, second) switch
+    {
+        (null or "", _) => second,
+        (_, null or "") => first,
+        _ when string.Equals(first, second, StringComparison.Ordinal) => first,
+        _ => $"{first}\n{second}",
     };
 
     private static AccountUpdated ToAccountUpdate(
         WebhookValue value,
         JsonElement raw,
-        string businessAccountId)
+        string businessAccountId,
+        DateTimeOffset entryTime)
     {
         // Sent as an object on some events and as a bare string on others; both forms are
         // live, and the string one is what Meta's own test delivery sends.
@@ -495,6 +524,7 @@ public static class WhatsAppWebhookParser
         return new AccountUpdated
         {
             BusinessAccountId = businessAccountId,
+            Timestamp = entryTime,
             Event = ParseAccountEvent(value.Event),
             RawEvent = value.Event,
             PhoneNumber = nested ? Property(number, "display_phone_number") : Text(number),
@@ -539,36 +569,48 @@ public static class WhatsAppWebhookParser
         _ => AccountUpdateEvent.Unknown,
     };
 
-    private static TemplateQualityChanged ToQualityChange(WebhookValue value, string businessAccountId) => new()
+    private static TemplateQualityChanged ToQualityChange(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
         TemplateName = value.MessageTemplateName ?? string.Empty,
         TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
         Previous = TemplateMapping.ParseQuality(value.PreviousQualityScore),
+        RawPrevious = value.PreviousQualityScore,
         Current = TemplateMapping.ParseQuality(value.NewQualityScore),
+        RawCurrent = value.NewQualityScore,
     };
 
     private static PhoneNumberQualityChanged ToPhoneNumberQualityChange(
         WebhookValue value,
-        string businessAccountId) => new()
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         DisplayPhoneNumber = value.DisplayPhoneNumber,
         Event = ParsePhoneNumberEvent(value.Event),
         RawEvent = value.Event,
         PreviousLimit = PhoneNumberMapping.ParseTier(value.OldLimit),
+        RawPreviousLimit = value.OldLimit,
         // `max_daily_conversations_per_business` replaced `current_limit`, which Meta retired
         // in February 2026. Older deliveries and some intermediaries still send the old one.
         CurrentLimit = PhoneNumberMapping.ParseTier(
             value.MaxDailyConversationsPerBusiness ?? value.CurrentLimit),
+        RawCurrentLimit = value.MaxDailyConversationsPerBusiness ?? value.CurrentLimit,
     };
 
     private static PhoneNumberNameChanged ToPhoneNumberNameChange(
         WebhookValue value,
-        string businessAccountId) => new()
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         DisplayPhoneNumber = value.DisplayPhoneNumber,
         Decision = ParseDecision(value.Decision),
         RawDecision = value.Decision,
@@ -579,9 +621,11 @@ public static class WhatsAppWebhookParser
 
     private static FlowStatusChanged ToFlowStatusChange(
         WebhookValue value,
-        string businessAccountId) => new()
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         FlowId = value.FlowId ?? string.Empty,
         // Absent when the Flow has just been created, which is the one case where there is no
         // previous state to report.
@@ -590,9 +634,13 @@ public static class WhatsAppWebhookParser
         Message = value.Message,
     };
 
-    private static FlowAlert ToFlowAlert(WebhookValue value, string businessAccountId) => new()
+    private static FlowAlert ToFlowAlert(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
     {
         BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
         FlowId = value.FlowId ?? string.Empty,
         Kind = ParseAlertKind(value.Event),
         RawKind = value.Event,
@@ -671,7 +719,8 @@ public static class WhatsAppWebhookParser
         WebhookValue value,
         string phoneNumberId,
         string? display,
-        string businessAccountId)
+        string businessAccountId,
+        DateTimeOffset entryTime)
     {
         if (message.Id is null || message.From is null)
         {
@@ -682,7 +731,7 @@ public static class WhatsAppWebhookParser
             phoneNumberId,
             businessAccountId,
             display,
-            ToTimestamp(message.Timestamp),
+            TryTimestamp(message.Timestamp) ?? entryTime,
             message.Id,
             message.From,
             ProfileNameOf(value, message.From),
@@ -690,7 +739,8 @@ public static class WhatsAppWebhookParser
             message.Context?.Forwarded == true || message.Context?.FrequentlyForwarded == true,
             message.Context?.FrequentlyForwarded == true,
             ToReferral(message.Referral),
-            ToReferredProduct(message.Context?.ReferredProduct));
+            ToReferredProduct(message.Context?.ReferredProduct),
+            ToIdentity(message.Identity));
 
         return message.Type switch
         {
@@ -811,7 +861,8 @@ public static class WhatsAppWebhookParser
         WebhookStatus status,
         string phoneNumberId,
         string? display,
-        string businessAccountId)
+        string businessAccountId,
+        DateTimeOffset entryTime)
     {
         if (status.Id is null || status.RecipientId is null)
         {
@@ -823,7 +874,7 @@ public static class WhatsAppWebhookParser
             PhoneNumberId = phoneNumberId,
             BusinessAccountId = businessAccountId,
             DisplayPhoneNumber = display,
-            Timestamp = ToTimestamp(status.Timestamp),
+            Timestamp = TryTimestamp(status.Timestamp) ?? entryTime,
             MessageId = status.Id,
             RecipientId = status.RecipientId,
             Status = status.Status switch
@@ -860,7 +911,9 @@ public static class WhatsAppWebhookParser
         New<UnsupportedMessage>(common) with
         {
             Type = type ?? "unknown",
-            Error = errors is { Count: > 0 } reported ? reported[0].ToError() : null,
+            Errors = errors is { Count: > 0 } reported
+                ? [.. reported.Select(e => e.ToError())]
+                : [],
         };
 
     private static TMessage New<TMessage>(MessageFields common)
@@ -879,6 +932,7 @@ public static class WhatsAppWebhookParser
             IsFrequentlyForwarded = common.FrequentlyForwarded,
             Referral = common.Referral,
             ReferredProduct = common.ReferredProduct,
+            Identity = common.Identity,
         };
 
     private static MessageReferral? ToReferral(WebhookReferral? referral) =>
@@ -901,6 +955,33 @@ public static class WhatsAppWebhookParser
     private static ReferredProduct? ToReferredProduct(WebhookReferredProduct? product) =>
         product is null ? null : new ReferredProduct(product.CatalogId, product.ProductRetailerId);
 
+    private static MessageIdentity? ToIdentity(WebhookIdentity? identity) =>
+        identity is null
+            ? null
+            : new MessageIdentity
+            {
+                KeyHash = identity.Hash,
+                // A boolean in the platform documentation and a string in Meta's own SDK
+                // types, so both are read.
+                Acknowledged = identity.Acknowledged.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    JsonValueKind.String when bool.TryParse(identity.Acknowledged.GetString(), out var flag) => flag,
+                    _ => null,
+                },
+                CreatedAt = UnixSeconds(identity.CreatedTimestamp),
+            };
+
+    /// <summary>Reads Unix seconds sent as a number or as a string, or nothing at all.</summary>
+    private static DateTimeOffset? UnixSeconds(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Number when value.TryGetInt64(out var seconds) =>
+            DateTimeOffset.FromUnixTimeSeconds(seconds),
+        JsonValueKind.String => TryTimestamp(value.GetString()),
+        _ => null,
+    };
+
     private static string? ProfileNameOf(WebhookValue value, string from)
     {
         foreach (var contact in value.Contacts ?? [])
@@ -913,9 +994,6 @@ public static class WhatsAppWebhookParser
 
         return null;
     }
-
-    private static DateTimeOffset ToTimestamp(string? timestamp) =>
-        TryTimestamp(timestamp) ?? default;
 
     private static DateTimeOffset? TryTimestamp(string? timestamp) =>
         long.TryParse(timestamp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds)
@@ -970,6 +1048,8 @@ public static class WhatsAppWebhookParser
         Birthday = DateOnly.TryParse(payload.Birthday, CultureInfo.InvariantCulture, out var birthday)
             ? birthday
             : null,
+        // vCards allow partial dates a DateOnly cannot hold, so the raw string survives.
+        RawBirthday = payload.Birthday,
     };
 
     private readonly record struct MessageFields(
@@ -984,5 +1064,6 @@ public static class WhatsAppWebhookParser
         bool Forwarded,
         bool FrequentlyForwarded,
         MessageReferral? Referral,
-        ReferredProduct? ReferredProduct);
+        ReferredProduct? ReferredProduct,
+        MessageIdentity? Identity);
 }

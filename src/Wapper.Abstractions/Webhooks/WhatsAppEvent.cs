@@ -85,6 +85,28 @@ public abstract record IncomingMessage : WhatsAppEvent
     /// The catalogue item the customer was looking at when they wrote, when they quoted one.
     /// </summary>
     public ReferredProduct? ReferredProduct { get; init; }
+
+    /// <summary>
+    /// Notice that the sender's identity may have changed — a reinstalled app, a new handset.
+    /// </summary>
+    /// <remarks>
+    /// Only sent for accounts with the identity change check switched on. An application that
+    /// enabled it did so to act on exactly this, so it is surfaced rather than dropped.
+    /// </remarks>
+    public MessageIdentity? Identity { get; init; }
+}
+
+/// <summary>The identity-change notice WhatsApp attaches to a message.</summary>
+public sealed record MessageIdentity
+{
+    /// <summary>Hash of the sender's current identity key.</summary>
+    public string? KeyHash { get; init; }
+
+    /// <summary>Whether the change has been acknowledged, when WhatsApp said.</summary>
+    public bool? Acknowledged { get; init; }
+
+    /// <summary>When the identity changed, when WhatsApp said.</summary>
+    public DateTimeOffset? CreatedAt { get; init; }
 }
 
 /// <summary>Where a customer came from, when they arrived through an ad or a post.</summary>
@@ -351,8 +373,11 @@ public sealed record UnsupportedMessage : IncomingMessage
     /// <summary>The <c>type</c> WhatsApp used.</summary>
     public string Type { get; init; } = string.Empty;
 
-    /// <summary>The error WhatsApp attached, when it said the message was unsupported.</summary>
-    public WhatsAppError? Error { get; init; }
+    /// <summary>The errors WhatsApp attached, when it said why the message was unsupported.</summary>
+    public IReadOnlyList<WhatsAppError> Errors { get; init; } = [];
+
+    /// <summary>The first of <see cref="Errors"/>, which is usually the only one.</summary>
+    public WhatsAppError? Error => Errors.Count > 0 ? Errors[0] : null;
 }
 
 /// <summary>How far along an outgoing message is.</summary>

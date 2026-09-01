@@ -87,5 +87,8 @@ signature hash wrong and the code silently never arrives — Meta matches on it 
 a passcode cannot be autofilled into an impostor app.
 
 Carousel and limited-time-offer templates, and catalogue buttons, are
-[not covered yet](raw.md#what-is-not-covered-yet).
+[not covered yet](raw.md#what-is-not-covered-yet). A template that carries such a component
+still reads back — the component's type is listed under `Template.UnknownComponents` — but
+`UpdateAsync` refuses it rather than writing the template back without it: components are
+replaced wholesale on an edit, so that write would erase the component at Meta.
 

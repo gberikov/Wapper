@@ -281,6 +281,46 @@ public class BusinessProfileApiTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task A_category_this_library_does_not_know_survives_a_round_trip_untouched()
+    {
+        const string Unrecognised = """
+            {"data":[{"about":"We sell butterflies.","vertical":"TELECOM"}]}
+            """;
+        var (profiles, _) = Create(Unrecognised);
+
+        var profile = await profiles.GetAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(BusinessVertical.Unknown, profile.Vertical);
+        Assert.Equal("TELECOM", profile.RawVertical);
+
+        // Writing the profile back with an unrelated edit must not clear the category: the
+        // empty string Unknown maps to is the documented clear, and this Unknown is merely a
+        // vertical this library has not been taught.
+        var (editor, handler) = Create(Ok);
+        await editor.UpdateAsync(
+            profile with { About = "New about" },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var body = JsonDocument.Parse(Assert.Single(handler.Bodies)!).RootElement;
+        Assert.Equal("New about", body.GetProperty("about").GetString());
+        Assert.False(body.TryGetProperty("vertical", out _));
+    }
+
+    [Fact]
+    public async Task An_explicit_unknown_still_clears_the_category()
+    {
+        var (profiles, handler) = Create(Ok);
+
+        // Unknown with no raw value behind it is a hand-built request, and the empty string
+        // is the documented way to clear.
+        await profiles.UpdateAsync(
+            new BusinessProfile { Vertical = BusinessVertical.Unknown },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var body = JsonDocument.Parse(Assert.Single(handler.Bodies)!).RootElement;
+        Assert.Equal(string.Empty, body.GetProperty("vertical").GetString());
+    }
+
     private static (IBusinessProfileApi Profiles, StubHttpMessageHandler Handler) Create(string response)
     {
         var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, response);

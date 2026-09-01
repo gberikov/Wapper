@@ -18,7 +18,9 @@ internal static class MessageMapping
     private const int MaxButtons = 3;
     private const int MaxButtonIdLength = 256;
     private const int MaxButtonTitleLength = 20;
-    private const int MaxButtonBodyLength = 1024;
+
+    /// <summary>Every interactive body but the list message's, which alone takes 4096.</summary>
+    internal const int MaxInteractiveBodyLength = 1024;
 
     private const int MaxSections = 10;
     private const int MaxRows = 10;
@@ -64,8 +66,10 @@ internal static class MessageMapping
             Latitude = location.Latitude,
             Longitude = location.Longitude,
             Name = location.Name,
-            // WhatsApp only shows the address when there is a name to show it under.
-            Address = location.Name is null ? null : location.Address,
+            // Sent whether or not there is a name. WhatsApp only shows the address under one,
+            // but that is a display rule for WhatsApp to apply — dropping the field here
+            // would lose it from a location merely being forwarded on.
+            Address = location.Address,
         };
     }
 
@@ -110,7 +114,10 @@ internal static class MessageMapping
                     Title = org.Title,
                 }
                 : null,
-            Birthday = contact.Birthday?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            // The raw form survives a round trip: a card received with a partial birthday
+            // forwards with it rather than losing it.
+            Birthday = contact.Birthday?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                ?? contact.RawBirthday,
         };
     }
 
@@ -126,7 +133,7 @@ internal static class MessageMapping
                 nameof(message));
         }
 
-        Limit(message.Body, MaxButtonBodyLength, "The body of a reply-button message");
+        Limit(message.Body, MaxInteractiveBodyLength, "The body of a reply-button message");
         Limit(message.Header?.Text, MaxHeaderLength, "A text header");
         Limit(message.Footer, MaxFooterLength, "A footer");
 
@@ -226,6 +233,13 @@ internal static class MessageMapping
     {
         ArgumentNullException.ThrowIfNull(message);
 
+        // The same documented limits as the other interactive types, and the same bare 100
+        // from Meta when one is passed.
+        Limit(message.Body, MaxInteractiveBodyLength, "The body of a call-to-action message");
+        Limit(message.Header?.Text, MaxHeaderLength, "A text header");
+        Limit(message.Footer, MaxFooterLength, "A footer");
+        Limit(message.ButtonText, MaxButtonTitleLength, "The label on a call-to-action button");
+
         return new InteractivePayload
         {
             Type = "cta_url",
@@ -248,6 +262,12 @@ internal static class MessageMapping
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(message.FlowToken);
+
+        // The button label is not limited here: Meta only advises 30 characters for the
+        // flow_cta rather than documenting a hard cap.
+        Limit(message.Body, MaxInteractiveBodyLength, "The body of a Flow message");
+        Limit(message.Header?.Text, MaxHeaderLength, "A text header");
+        Limit(message.Footer, MaxFooterLength, "A footer");
 
         if (string.IsNullOrWhiteSpace(message.FlowId) == string.IsNullOrWhiteSpace(message.FlowName))
         {
@@ -446,7 +466,7 @@ internal static class MessageMapping
     /// <c>100</c> that says nothing about which of a dozen strings it objected to, and a list
     /// message has one per row.
     /// </remarks>
-    private static void Limit(string? value, int max, string what)
+    internal static void Limit(string? value, int max, string what)
     {
         if (value is not null && value.Length > max)
         {

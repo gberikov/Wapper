@@ -100,6 +100,11 @@ public sealed record BusinessProfile
     public string? Email { get; init; }
 
     /// <summary>Category of the business.</summary>
+    /// <remarks>
+    /// On an update, <see cref="BusinessVertical.Unknown"/> clears the category — unless
+    /// <see cref="RawVertical"/> is set, which marks a profile read back with a category this
+    /// library does not know; that one is left untouched rather than erased.
+    /// </remarks>
     public BusinessVertical? Vertical { get; init; }
 
     /// <summary>

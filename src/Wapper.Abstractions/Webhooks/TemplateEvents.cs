@@ -110,6 +110,12 @@ public sealed record TemplateQualityChanged : WhatsAppEvent
     /// <summary>What the rating was.</summary>
     public TemplateQuality Previous { get; init; }
 
+    /// <summary>The raw previous rating, in case Meta sent one this library does not know.</summary>
+    public string? RawPrevious { get; init; }
+
     /// <summary>What it is now.</summary>
     public TemplateQuality Current { get; init; }
+
+    /// <summary>The raw current rating.</summary>
+    public string? RawCurrent { get; init; }
 }

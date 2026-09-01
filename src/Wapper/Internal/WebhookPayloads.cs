@@ -18,6 +18,14 @@ internal sealed class WebhookEntry
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
+    /// <summary>
+    /// Unix seconds. The only timestamp an account-level change — a template verdict, a ban —
+    /// carries at all.
+    /// </summary>
+    [JsonPropertyName("time")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Time { get; set; }
+
     [JsonPropertyName("changes")]
     public List<WebhookChange>? Changes { get; set; }
 }
@@ -353,6 +361,10 @@ internal sealed class WebhookMessage
     [JsonPropertyName("system")]
     public WebhookSystem? System { get; set; }
 
+    /// <summary>Sent when the sender's identity may have changed, if the check is enabled.</summary>
+    [JsonPropertyName("identity")]
+    public WebhookIdentity? Identity { get; set; }
+
     [JsonPropertyName("order")]
     public WebhookOrder? Order { get; set; }
 
@@ -530,6 +542,25 @@ internal sealed class WebhookButton
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }
+}
+
+/// <summary>
+/// Wire shape of the identity-change notice on a message.
+/// </summary>
+/// <remarks>
+/// Meta's own SDK types <c>acknowledged</c> and <c>created_timestamp</c> as strings while the
+/// platform documentation shows a boolean and a number, so both stay raw until they are read.
+/// </remarks>
+internal sealed class WebhookIdentity
+{
+    [JsonPropertyName("acknowledged")]
+    public JsonElement Acknowledged { get; set; }
+
+    [JsonPropertyName("created_timestamp")]
+    public JsonElement CreatedTimestamp { get; set; }
+
+    [JsonPropertyName("hash")]
+    public string? Hash { get; set; }
 }
 
 internal sealed class WebhookSystem
