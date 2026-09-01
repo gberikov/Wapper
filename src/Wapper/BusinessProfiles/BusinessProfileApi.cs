@@ -84,7 +84,6 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
                         payload,
                         WhatsAppJsonContext.Default.BusinessProfilePayload),
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -168,8 +167,16 @@ internal sealed class BusinessProfileApi(GraphApiClient client, string tenant) :
             Description = profile.Description,
             Email = profile.Email,
             // An empty string is how the category is cleared, so it is not the same as leaving
-            // the property unset.
-            Vertical = profile.Vertical is { } vertical ? ToWire(vertical) : null,
+            // the property unset. Unknown with a raw value behind it is not a clear, though:
+            // it is a profile read back with a category this library has not been taught, and
+            // clearing it over an unrelated edit would erase data the caller never touched —
+            // so it is left alone, which is what the merge semantics do for every other field.
+            Vertical = profile.Vertical switch
+            {
+                null => null,
+                BusinessVertical.Unknown when profile.RawVertical is not null => null,
+                { } vertical => ToWire(vertical),
+            },
             Websites = profile.Websites?.ToList(),
             ProfilePictureHandle = profile.PictureHandle,
         };

@@ -227,6 +227,12 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(body);
+        // An interactive body like the others, with their 1024-character limit and Meta's
+        // bare 100 when it is passed.
+        MessageMapping.Limit(
+            body,
+            MessageMapping.MaxInteractiveBodyLength,
+            "The body of a location request");
 
         return SendInteractiveAsync(
             to,
@@ -291,7 +297,7 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
             TypingIndicator = showTyping ? new TypingIndicatorPayload() : null,
         };
 
-        await client.SendAsync(
+        var response = await client.SendAsync(
                 new GraphRequest
                 {
                     Tenant = tenant,
@@ -307,6 +313,15 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                 WhatsAppJsonContext.Default.SendMessageResponse,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        // The one answer this call gives. An explicit false on a 200 would otherwise read
+        // as the receipt having been delivered.
+        if (response.Success is false)
+        {
+            throw new WhatsAppException(
+                "The Cloud API answered the read receipt with \"success\": false and no " +
+                "error object, so the message was not marked read.");
+        }
     }
 
     /// <remarks>

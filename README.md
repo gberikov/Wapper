@@ -35,6 +35,7 @@ arrives, and telling the errors apart — lives in [`samples/Wapper.Sample`](htt
 | [Running in more than one instance](https://github.com/gberikov/Wapper/blob/master/docs/redis.md) | Sharing the rate limit budgets across replicas. |
 | [Logging, tracing and testing](https://github.com/gberikov/Wapper/blob/master/docs/diagnostics.md) | What the client says about itself, and how to stand in for it in a test. |
 | [Uncovered endpoints](https://github.com/gberikov/Wapper/blob/master/docs/raw.md) | The escape hatch for what this library does not model, and an honest list of the gaps. |
+| [Changelog](https://github.com/gberikov/Wapper/blob/master/CHANGELOG.md) | What changed in each release, and what to do about it. |
 
 ## Getting started
 

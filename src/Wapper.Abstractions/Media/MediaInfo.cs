@@ -18,7 +18,13 @@ public sealed record MediaInfo
     /// <summary>Media type, for example <c>image/jpeg</c>.</summary>
     public string? MimeType { get; init; }
 
-    /// <summary>Size in bytes.</summary>
+    /// <summary>
+    /// Size in bytes, as the platform reported it.
+    /// </summary>
+    /// <remarks>
+    /// Good for sizing a buffer and not for trusting: nothing checks the download against it,
+    /// and a stream that runs longer than this is not an error anything here will raise.
+    /// </remarks>
     public long FileSize { get; init; }
 
     /// <summary>Checksum Meta computed for the file.</summary>
@@ -33,13 +39,26 @@ public sealed record MediaInfo
 public sealed class MediaContent(Stream content, string? mimeType, long? fileSize)
     : IDisposable, IAsyncDisposable
 {
-    /// <summary>The bytes. Read once, forward only.</summary>
+    /// <summary>
+    /// The bytes. Read once, forward only.
+    /// </summary>
+    /// <remarks>
+    /// Unbounded. Copy it with a ceiling of your own — nothing here stops a response that
+    /// keeps going, and <see cref="FileSize"/> is not a promise that it will not.
+    /// </remarks>
     public Stream Content { get; } = content;
 
     /// <summary>Media type reported by the server.</summary>
     public string? MimeType { get; } = mimeType;
 
-    /// <summary>Length in bytes, when the server said.</summary>
+    /// <summary>
+    /// Length in bytes, when the server said.
+    /// </summary>
+    /// <remarks>
+    /// The <c>Content-Length</c> header, falling back to what the lookup reported. Neither is
+    /// checked against what actually arrives, so treat it as a hint for sizing a buffer
+    /// rather than as the amount to expect.
+    /// </remarks>
     public long? FileSize { get; } = fileSize;
 
     /// <inheritdoc />

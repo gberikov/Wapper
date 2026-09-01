@@ -8,6 +8,37 @@ namespace Wapper.Messages;
 /// <summary>Turns the public message models into the shapes the Cloud API expects.</summary>
 internal static class MessageMapping
 {
+    // What Meta accepts in an interactive message. Checked here because the alternative is
+    // its answer to an oversized field: a bare 100 that does not say which field it objected
+    // to, on a send that looked perfectly reasonable.
+    //
+    // The two body limits really do differ — a reply-button message takes 1024 characters and
+    // a list message 4096 — and both are Meta's own documented numbers.
+
+    private const int MaxButtons = 3;
+    private const int MaxButtonIdLength = 256;
+    private const int MaxButtonTitleLength = 20;
+
+    /// <summary>Every interactive body but the list message's, which alone takes 4096.</summary>
+    internal const int MaxInteractiveBodyLength = 1024;
+
+    private const int MaxSections = 10;
+    private const int MaxRows = 10;
+    private const int MaxSectionTitleLength = 24;
+    private const int MaxRowIdLength = 200;
+    private const int MaxRowTitleLength = 24;
+    private const int MaxRowDescriptionLength = 72;
+    private const int MaxListButtonLength = 20;
+    private const int MaxListBodyLength = 4096;
+
+    private const int MaxHeaderLength = 60;
+    private const int MaxFooterLength = 60;
+
+    /// <summary>
+    /// The parameter each of these limits is thrown against: the message the caller handed in.
+    /// </summary>
+    private const string MessageParameter = "message";
+
     public static MediaPayload ToPayload(this MediaSource source, string? caption = null, string? fileName = null)
     {
         if (source.Id is null && source.Link is null)
@@ -35,8 +66,10 @@ internal static class MessageMapping
             Latitude = location.Latitude,
             Longitude = location.Longitude,
             Name = location.Name,
-            // WhatsApp only shows the address when there is a name to show it under.
-            Address = location.Name is null ? null : location.Address,
+            // Sent whether or not there is a name. WhatsApp only shows the address under one,
+            // but that is a display rule for WhatsApp to apply — dropping the field here
+            // would lose it from a location merely being forwarded on.
+            Address = location.Address,
         };
     }
 
@@ -81,7 +114,10 @@ internal static class MessageMapping
                     Title = org.Title,
                 }
                 : null,
-            Birthday = contact.Birthday?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            // The raw form survives a round trip: a card received with a partial birthday
+            // forwards with it rather than losing it.
+            Birthday = contact.Birthday?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                ?? contact.RawBirthday,
         };
     }
 
@@ -89,12 +125,22 @@ internal static class MessageMapping
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        if (message.Buttons.Count is 0 or > 3)
+        if (message.Buttons.Count is 0 or > MaxButtons)
         {
             throw new ArgumentException(
-                $"A reply-button message carries one to three buttons, and this one has " +
+                $"A reply-button message carries one to {MaxButtons} buttons, and this one has " +
                 $"{message.Buttons.Count}. Use a list message for more choices.",
                 nameof(message));
+        }
+
+        Limit(message.Body, MaxInteractiveBodyLength, "The body of a reply-button message");
+        Limit(message.Header?.Text, MaxHeaderLength, "A text header");
+        Limit(message.Footer, MaxFooterLength, "A footer");
+
+        for (var i = 0; i < message.Buttons.Count; i++)
+        {
+            Limit(message.Buttons[i].Id, MaxButtonIdLength, $"The id of button {i + 1}");
+            Limit(message.Buttons[i].Title, MaxButtonTitleLength, $"The title of button {i + 1}");
         }
 
         return new InteractivePayload
@@ -118,12 +164,42 @@ internal static class MessageMapping
         ArgumentNullException.ThrowIfNull(message);
 
         var rows = message.Sections.Sum(s => s.Rows.Count);
-        if (rows is 0 or > 10)
+        if (rows is 0 or > MaxRows)
         {
             throw new ArgumentException(
-                $"A list message carries one to ten rows across all its sections, and this one " +
-                $"has {rows}.",
+                $"A list message carries one to {MaxRows} rows across all its sections, and this " +
+                $"one has {rows}.",
                 nameof(message));
+        }
+
+        if (message.Sections.Count > MaxSections)
+        {
+            throw new ArgumentException(
+                $"A list message carries at most {MaxSections} sections, and this one has " +
+                $"{message.Sections.Count}.",
+                nameof(message));
+        }
+
+        Limit(message.Body, MaxListBodyLength, "The body of a list message");
+        Limit(message.Header, MaxHeaderLength, "A text header");
+        Limit(message.Footer, MaxFooterLength, "A footer");
+        Limit(message.ButtonText, MaxListButtonLength, "The text on the button that opens a list");
+
+        for (var s = 0; s < message.Sections.Count; s++)
+        {
+            var section = message.Sections[s];
+
+            Limit(section.Title, MaxSectionTitleLength, $"The title of section {s + 1}");
+
+            for (var r = 0; r < section.Rows.Count; r++)
+            {
+                // Numbered within the section, because that is how the caller wrote them.
+                var where = $"row {r + 1} of section {s + 1}";
+
+                Limit(section.Rows[r].Id, MaxRowIdLength, $"The id of {where}");
+                Limit(section.Rows[r].Title, MaxRowTitleLength, $"The title of {where}");
+                Limit(section.Rows[r].Description, MaxRowDescriptionLength, $"The description of {where}");
+            }
         }
 
         return new InteractivePayload
@@ -157,6 +233,13 @@ internal static class MessageMapping
     {
         ArgumentNullException.ThrowIfNull(message);
 
+        // The same documented limits as the other interactive types, and the same bare 100
+        // from Meta when one is passed.
+        Limit(message.Body, MaxInteractiveBodyLength, "The body of a call-to-action message");
+        Limit(message.Header?.Text, MaxHeaderLength, "A text header");
+        Limit(message.Footer, MaxFooterLength, "A footer");
+        Limit(message.ButtonText, MaxButtonTitleLength, "The label on a call-to-action button");
+
         return new InteractivePayload
         {
             Type = "cta_url",
@@ -179,6 +262,12 @@ internal static class MessageMapping
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentException.ThrowIfNullOrWhiteSpace(message.FlowToken);
+
+        // The button label is not limited here: Meta only advises 30 characters for the
+        // flow_cta rather than documenting a hard cap.
+        Limit(message.Body, MaxInteractiveBodyLength, "The body of a Flow message");
+        Limit(message.Header?.Text, MaxHeaderLength, "A text header");
+        Limit(message.Footer, MaxFooterLength, "A footer");
 
         if (string.IsNullOrWhiteSpace(message.FlowId) == string.IsNullOrWhiteSpace(message.FlowName))
         {
@@ -368,6 +457,24 @@ internal static class MessageMapping
 
     private static InteractiveTextPayload? Footer(string? footer) =>
         footer is null ? null : new InteractiveTextPayload { Text = footer };
+
+    /// <summary>
+    /// Refuses a field longer than Meta accepts, saying which field and how long it is.
+    /// </summary>
+    /// <remarks>
+    /// Naming the field is the whole point. Meta answers an oversized one with a bare
+    /// <c>100</c> that says nothing about which of a dozen strings it objected to, and a list
+    /// message has one per row.
+    /// </remarks>
+    internal static void Limit(string? value, int max, string what)
+    {
+        if (value is not null && value.Length > max)
+        {
+            throw new ArgumentException(
+                $"{what} is at most {max} characters, and this one is {value.Length}.",
+                MessageParameter);
+        }
+    }
 
     private static List<TTarget>? Map<TSource, TTarget>(
         IReadOnlyList<TSource> source,

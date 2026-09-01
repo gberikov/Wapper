@@ -209,7 +209,6 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                         payload,
                         WhatsAppJsonContext.Default.FlowDefinitionPayload),
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -306,7 +305,6 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Kind = GraphCallKind.Management,
                     Operation = "flows.delete",
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -393,7 +391,6 @@ internal sealed class FlowsApi(GraphApiClient client, string tenant) : IFlowsApi
                     Kind = GraphCallKind.Management,
                     Operation = operation,
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }

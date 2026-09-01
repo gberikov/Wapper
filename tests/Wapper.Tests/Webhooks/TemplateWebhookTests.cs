@@ -112,6 +112,107 @@ public class TemplateWebhookTests
     }
 
     [Fact]
+    public void A_rejection_carries_the_reviewer_s_own_words()
+    {
+        // `reason` alone is INVALID_FORMAT, which tells an operator nothing about what to
+        // change. Meta puts that in `rejection_info`, not in the `other_info` the library
+        // used to read.
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            "message_template_status_update",
+            """
+            {
+              "event": "REJECTED",
+              "message_template_id": 1387372356726668,
+              "message_template_name": "abandoned_cart",
+              "message_template_language": "en_US",
+              "reason": "INVALID_FORMAT",
+              "rejection_info": {
+                "reason": "Your template has parameters placed next to each other.",
+                "recommendation": "Separate parameters with descriptive text."
+              }
+            }
+            """));
+
+        var change = Assert.IsType<TemplateStatusChanged>(Assert.Single(events));
+
+        Assert.Equal(TemplateStatus.Rejected, change.Status);
+        Assert.Equal(TemplateStatusChangeReason.InvalidFormat, change.Reason);
+        Assert.Equal("Your template has parameters placed next to each other.", change.Details);
+        Assert.Equal("Separate parameters with descriptive text.", change.Recommendation);
+    }
+
+    [Fact]
+    public void Both_reviewer_texts_survive_when_meta_sends_both()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            "message_template_status_update",
+            """
+            {
+              "event": "REJECTED",
+              "message_template_id": 1,
+              "message_template_name": "n",
+              "message_template_language": "en",
+              "reason": "ABUSIVE_CONTENT",
+              "other_info": {"title": "Component", "description": "The body asks for a PIN."},
+              "rejection_info": {"reason": "PINs may not be requested.", "recommendation": "Remove the request."}
+            }
+            """));
+
+        var change = Assert.IsType<TemplateStatusChanged>(Assert.Single(events));
+
+        // Neither sentence shadows the other: coalescing would keep one and lose the one an
+        // operator happened to need.
+        Assert.Equal("The body asks for a PIN.\nPINs may not be requested.", change.Details);
+        // The recommendation comes along either way; it has nowhere else to go.
+        Assert.Equal("Remove the request.", change.Recommendation);
+    }
+
+    [Fact]
+    public void An_account_level_event_carries_the_delivery_time()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            "message_template_status_update",
+            """
+            {
+              "event": "APPROVED",
+              "message_template_id": 1,
+              "message_template_name": "n",
+              "message_template_language": "en"
+            }
+            """));
+
+        var change = Assert.IsType<TemplateStatusChanged>(Assert.Single(events));
+
+        // The entry's `time` is the only timestamp these payloads carry at all. Losing it
+        // stamped every account-level event with the year one, which nothing downstream can
+        // tell from data corruption.
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1755000000), change.Timestamp);
+    }
+
+    [Fact]
+    public void A_quality_spelling_this_library_does_not_know_is_kept_raw()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            "message_template_quality_update",
+            """
+            {
+              "previous_quality_score": "GREEN",
+              "new_quality_score": "SUPERB",
+              "message_template_id": 1,
+              "message_template_name": "n",
+              "message_template_language": "en"
+            }
+            """));
+
+        var change = Assert.IsType<TemplateQualityChanged>(Assert.Single(events));
+
+        Assert.Equal(TemplateQuality.Green, change.Previous);
+        Assert.Equal("GREEN", change.RawPrevious);
+        Assert.Equal(TemplateQuality.Unknown, change.Current);
+        Assert.Equal("SUPERB", change.RawCurrent);
+    }
+
+    [Fact]
     public void A_quality_drop_is_parsed()
     {
         var events = WhatsAppWebhookParser.Parse(Delivery(

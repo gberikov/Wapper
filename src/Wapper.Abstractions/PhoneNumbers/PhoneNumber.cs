@@ -222,29 +222,56 @@ public sealed record PhoneNumber
     /// <summary>Whether the number can send and receive.</summary>
     public PhoneNumberStatus Status { get; init; }
 
+    /// <summary>The raw status string, in case Meta sent one this library does not know.</summary>
+    public string? RawStatus { get; init; }
+
     /// <summary>How recipients have been receiving its messages.</summary>
     public PhoneNumberQuality Quality { get; init; }
+
+    /// <summary>The raw quality rating.</summary>
+    public string? RawQuality { get; init; }
 
     /// <summary>Whether ownership has been proven with a code.</summary>
     public CodeVerificationStatus CodeVerification { get; init; }
 
+    /// <summary>The raw code verification status.</summary>
+    public string? RawCodeVerification { get; init; }
+
     /// <summary>Where the current display name stands with review.</summary>
     public DisplayNameStatus NameStatus { get; init; }
+
+    /// <summary>The raw name status.</summary>
+    public string? RawNameStatus { get; init; }
 
     /// <summary>Where a requested change of display name stands. Only set while one is pending.</summary>
     public DisplayNameStatus NewNameStatus { get; init; }
 
+    /// <summary>The raw new-name status.</summary>
+    public string? RawNewNameStatus { get; init; }
+
     /// <summary>How fast this number may send.</summary>
     public ThroughputLevel Throughput { get; init; }
+
+    /// <summary>The raw throughput level.</summary>
+    public string? RawThroughput { get; init; }
 
     /// <summary>How many customers a day it may start a conversation with.</summary>
     public MessagingLimitTier MessagingLimit { get; init; }
 
+    /// <summary>The raw messaging limit tier.</summary>
+    public string? RawMessagingLimit { get; init; }
+
     /// <summary>Which platform hosts it.</summary>
     public PhoneNumberPlatform Platform { get; init; }
 
+    /// <summary>The raw platform type.</summary>
+    public string? RawPlatform { get; init; }
+
     /// <summary>Whether it sends to real customers or only to test numbers.</summary>
     public PhoneNumberAccountMode AccountMode { get; init; }
+
+    /// <summary>The raw account mode.</summary>
+    public string? RawAccountMode { get; init; }
 
     /// <summary>Whether it carries the blue checkmark.</summary>
     public bool IsOfficialBusinessAccount { get; init; }

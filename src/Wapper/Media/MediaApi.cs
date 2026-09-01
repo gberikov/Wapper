@@ -145,7 +145,7 @@ internal sealed class MediaApi(GraphApiClient client, string tenant) : IMediaApi
                 cancellationToken)
             .ConfigureAwait(false);
 
-        return response.Success;
+        return response.Success ?? false;
     }
 
     private static void GuardSize(Stream content, string mimeType)

@@ -151,6 +151,10 @@ internal sealed class TemplateAnalyticsResponse
 {
     [JsonPropertyName("data")]
     public List<TemplateAnalyticsPayload>? Data { get; set; }
+
+    /// <summary>An ordinary Graph edge, so it pages like one — unlike the field expansions.</summary>
+    [JsonPropertyName("paging")]
+    public GraphPagingPayload? Paging { get; set; }
 }
 
 internal sealed class TemplateAnalyticsPayload

@@ -39,10 +39,12 @@ public readonly record struct RateLimitScope(RateLimitBudget Budget, string Key)
     /// The key with a recipient's number reduced to its last four digits.
     /// </summary>
     /// <remarks>
-    /// Used in exception messages, which end up in logs. A pair scope is keyed by the
-    /// customer's phone number, and that is personal data nobody asked to have logged.
+    /// Used in exception messages and log lines, which end up in storage. A pair scope is
+    /// keyed by the customer's phone number, and that is personal data nobody asked to have
+    /// logged — so anything writing a scope somewhere durable writes this, and
+    /// <see cref="Key"/> stays for code that deliberately wants the number.
     /// </remarks>
-    internal string RedactedKey
+    public string RedactedKey
     {
         get
         {

@@ -30,6 +30,11 @@ so handle it rather than polling.
 builder.Services.AddWhatsAppWebhookHandler<TemplateWatcher, TemplateStatusChanged>();
 ```
 
+On a rejection, `Reason` is a category — `InvalidFormat` — and says nothing about what to
+change. `Details` and `Recommendation` carry the review's own words: *"Your template has
+parameters placed next to each other"*, *"Separate parameters with descriptive text"*. Put
+both in front of whoever has to fix the template.
+
 Prefer named parameters over numbered ones. Numbered placeholders are matched by position, so
 inserting one renumbers everything after it — in the template *and* in every call site that
 sends it.
@@ -82,5 +87,8 @@ signature hash wrong and the code silently never arrives — Meta matches on it 
 a passcode cannot be autofilled into an impostor app.
 
 Carousel and limited-time-offer templates, and catalogue buttons, are
-[not covered yet](raw.md#what-is-not-covered-yet).
+[not covered yet](raw.md#what-is-not-covered-yet). A template that carries such a component
+still reads back — the component's type is listed under `Template.UnknownComponents` — but
+`UpdateAsync` refuses it rather than writing the template back without it: components are
+replaced wholesale on an edit, so that write would erase the component at Meta.
 

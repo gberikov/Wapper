@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Wapper;
 using Wapper.Internal;
 using Wapper.RateLimiting;
+using Wapper.Webhooks;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -187,6 +188,8 @@ public static class WhatsAppServiceCollectionExtensions
         IConfiguration? own,
         Action<WhatsAppOptions>? configure)
     {
+        services.TenantNames().Add(tenant);
+
         var options = services.AddOptions<WhatsAppOptions>(tenant);
 
         if (shared is not null)
@@ -207,6 +210,34 @@ public static class WhatsAppServiceCollectionExtensions
         options.ValidateOnStart();
     }
 
+    /// <summary>
+    /// The list of registered tenant names, created on the first registration and shared by
+    /// every one after it.
+    /// </summary>
+    /// <remarks>
+    /// Held as an instance rather than resolved, because it is written while the container is
+    /// being built and read only once it is running. <c>IOptionsMonitor</c> cannot be asked
+    /// which names exist, and resolving a webhook delivery to a tenant has to look at all of
+    /// them.
+    /// </remarks>
+    private static WhatsAppTenantNames TenantNames(this IServiceCollection services)
+    {
+        foreach (var descriptor in services)
+        {
+            if (descriptor.ServiceType == typeof(WhatsAppTenantNames)
+                && descriptor.ImplementationInstance is WhatsAppTenantNames existing)
+            {
+                return existing;
+            }
+        }
+
+        var names = new WhatsAppTenantNames();
+
+        services.AddSingleton(names);
+
+        return names;
+    }
+
     private static IHttpClientBuilder AddWhatsAppCore(this IServiceCollection services)
     {
         services.TryAddEnumerable(
@@ -214,6 +245,16 @@ public static class WhatsAppServiceCollectionExtensions
 
         // Replaced by the host when credentials come from somewhere other than configuration.
         services.TryAddSingleton<IWhatsAppCredentialsProvider, OptionsCredentialsProvider>();
+
+        // Replaced for the same reason: a host whose tenants live in a database knows which
+        // one a delivery belongs to, and walking the configured options cannot. The
+        // configuration is resolved rather than required, because a service collection
+        // without one is a perfectly good way to use this library from a test.
+        services.TryAddSingleton<IWhatsAppWebhookTenantResolver>(static provider =>
+            new OptionsWebhookTenantResolver(
+                provider.GetRequiredService<IOptionsMonitor<WhatsAppOptions>>(),
+                provider.GetRequiredService<WhatsAppTenantNames>(),
+                provider.GetService<IConfiguration>()));
 
         // Replaced by the Redis package when the application runs in more than one instance.
         services.TryAddSingleton<IWhatsAppRateLimiter, InMemoryRateLimiter>();

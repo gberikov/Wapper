@@ -80,6 +80,9 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
             case FlowAlert alert:
                 await InvokeAsync(services, alert, cancellationToken).ConfigureAwait(false);
                 break;
+            case AccountUpdated account:
+                await InvokeAsync(services, account, cancellationToken).ConfigureAwait(false);
+                break;
             case MarketingPreferenceChanged preference:
                 await InvokeAsync(services, preference, cancellationToken).ConfigureAwait(false);
                 break;

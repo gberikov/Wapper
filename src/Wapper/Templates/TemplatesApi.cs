@@ -156,7 +156,6 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -184,7 +183,6 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                         payload,
                         WhatsAppJsonContext.Default.TemplateDefinitionPayload),
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -276,7 +274,6 @@ internal sealed class TemplatesApi(GraphApiClient client, string tenant) : ITemp
                     Kind = GraphCallKind.Management,
                     Operation = "templates.delete",
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }

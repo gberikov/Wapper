@@ -50,6 +50,80 @@ public class WebhookParserTests
     }
 
     [Fact]
+    public void An_identity_change_notice_is_surfaced_in_either_spelling()
+    {
+        // Meta's SDK types acknowledged and created_timestamp as strings while the platform
+        // documentation shows a boolean and a number; an account that switched the check on
+        // did so to act on exactly this notice.
+        var events = WhatsAppWebhookParser.Parse(Delivery("""
+            "messages": [{
+              "from": "79000000001",
+              "id": "wamid.HBgL",
+              "timestamp": "1755000000",
+              "type": "text",
+              "text": {"body": "hello"},
+              "identity": {"acknowledged": "true", "created_timestamp": "1754000000", "hash": "Sjvjlx8G6Z0="}
+            }]
+            """));
+
+        var identity = Assert.IsType<TextMessage>(Assert.Single(events)).Identity!;
+
+        Assert.Equal("Sjvjlx8G6Z0=", identity.KeyHash);
+        Assert.Equal(true, identity.Acknowledged);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1754000000), identity.CreatedAt);
+    }
+
+    [Fact]
+    public void An_unsupported_message_keeps_every_error_it_arrived_with()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery("""
+            "messages": [{
+              "from": "79000000001",
+              "id": "wamid.HBgL",
+              "timestamp": "1755000000",
+              "type": "unsupported",
+              "errors": [{"code": 131051, "title": "Message type unknown"},
+                         {"code": 131052, "title": "Media download error"}]
+            }]
+            """));
+
+        var message = Assert.IsType<UnsupportedMessage>(Assert.Single(events));
+
+        Assert.Equal([131051, 131052], message.Errors.Select(e => e.Code));
+        // The convenience view is the first error, which is usually the only one.
+        Assert.Equal(131051, message.Error!.Code);
+    }
+
+    [Fact]
+    public void A_message_without_its_own_timestamp_falls_back_to_the_delivery_time()
+    {
+        var events = WhatsAppWebhookParser.Parse("""
+            {
+              "object": "whatsapp_business_account",
+              "entry": [{
+                "id": "WABA_ID",
+                "time": 1755000000,
+                "changes": [{
+                  "field": "messages",
+                  "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "1555", "phone_number_id": "106540352242922"},
+                    "messages": [{"from": "79000000001", "id": "wamid.HBgL", "type": "text",
+                                  "text": {"body": "hello"}}]
+                  }
+                }]
+              }]
+            }
+            """);
+
+        var message = Assert.IsType<TextMessage>(Assert.Single(events));
+
+        // Better the delivery time than the year one, which nothing downstream can tell
+        // from data corruption.
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1755000000), message.Timestamp);
+    }
+
+    [Fact]
     public void A_quoted_reply_carries_the_message_it_answers()
     {
         var events = WhatsAppWebhookParser.Parse(Delivery("""
@@ -269,16 +343,21 @@ public class WebhookParserTests
               "recipient_id": "79000000001",
               "errors": [{
                 "code": {{WhatsAppErrorCodes.UserOptedOut}},
-                "title": "Marketing message not delivered",
+                "title": "Healthy ecosystem",
                 "error_data": {"details": "This message was not delivered."}
               }]
             }]
             """));
 
         var status = Assert.IsType<MessageStatusChanged>(Assert.Single(events));
+        var error = Assert.Single(status.Errors);
 
         Assert.Equal(MessageDeliveryStatus.Failed, status.Status);
-        Assert.Equal(WhatsAppErrorCodes.UserOptedOut, Assert.Single(status.Errors).Code);
+        Assert.Equal(WhatsAppErrorCodes.UserOptedOut, error.Code);
+        // On a webhook the title is sometimes the whole of what Meta says. There is no
+        // `message` on this one at all.
+        Assert.Equal("Healthy ecosystem", error.Title);
+        Assert.Null(error.Message);
     }
 
     [Fact]
@@ -345,10 +424,12 @@ public class WebhookParserTests
     }
 
     [Fact]
-    public void A_change_without_a_phone_number_is_ignored()
+    public void A_change_without_a_phone_number_is_reported_rather_than_dropped()
     {
-        // Nothing else in the payload identifies the account, so an event without it cannot
-        // be attributed to a tenant and must not be handed to a handler as though it could.
+        // Nothing else in the payload identifies the number, so the message cannot be
+        // attributed to a tenant and must not be handed to a handler as though it could. It
+        // must not vanish either: an incoming message disappearing is not something an
+        // application can find out about any other way.
         var events = WhatsAppWebhookParser.Parse("""
             {"object":"whatsapp_business_account","entry":[{"id":"W","changes":[{"field":"messages",
              "value":{"messaging_product":"whatsapp",
@@ -356,7 +437,10 @@ public class WebhookParserTests
                            "text":{"body":"hi"}}]}}]}]}
             """);
 
-        Assert.Empty(events);
+        var unknown = Assert.IsType<UnknownEvent>(Assert.Single(events));
+
+        Assert.Equal("messages", unknown.Field);
+        Assert.Contains("wamid.A", unknown.Json, StringComparison.Ordinal);
     }
 
     [Theory]

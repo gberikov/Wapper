@@ -501,6 +501,9 @@ public sealed record Template
     /// <summary>How recipients have been receiving it, when Meta reported it. Read only.</summary>
     public TemplateQuality QualityScore { get; init; }
 
+    /// <summary>The raw quality string, in case Meta sent one this library does not know.</summary>
+    public string? RawQualityScore { get; init; }
+
     /// <summary>Why review turned it down, when it did. Read only.</summary>
     public string? RejectedReason { get; init; }
 
@@ -508,6 +511,18 @@ public sealed record Template
     /// The category it sat in before Meta moved it, when Meta moved it. Read only.
     /// </summary>
     public TemplateCategory PreviousCategory { get; init; }
+
+    /// <summary>
+    /// The <c>type</c> strings of components this library has no typed form for — a carousel,
+    /// a limited-time offer, whatever Meta adds next. Read only.
+    /// </summary>
+    /// <remarks>
+    /// Kept so an edit cannot destroy them by accident: components are replaced wholesale on
+    /// an update, and a template that reads back with entries here is refused by
+    /// <c>UpdateAsync</c> rather than written back without them — which would erase them at
+    /// Meta.
+    /// </remarks>
+    public IReadOnlyList<string> UnknownComponents { get; init; } = [];
 
     /// <summary>
     /// An authentication template: a one-time passcode and the button that hands it over.

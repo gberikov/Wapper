@@ -52,8 +52,21 @@ public sealed record TemplateStatusChanged : WhatsAppEvent
     /// <summary>The raw reason string.</summary>
     public string? RawReason { get; init; }
 
-    /// <summary>Anything else Meta attached, such as the title of a rejected component.</summary>
+    /// <summary>
+    /// Anything else Meta attached: the title of a rejected component, or — on a rejection —
+    /// the review's own sentence about what is wrong with the template.
+    /// </summary>
     public string? Details { get; init; }
+
+    /// <summary>
+    /// What Meta suggests changing, on a rejection.
+    /// </summary>
+    /// <remarks>
+    /// The actionable half of a rejection. <see cref="Reason"/> only says
+    /// <see cref="TemplateStatusChangeReason.InvalidFormat"/>; this says "Separate parameters
+    /// with descriptive text."
+    /// </remarks>
+    public string? Recommendation { get; init; }
 }
 
 /// <summary>How well recipients are receiving a template.</summary>
@@ -97,6 +110,12 @@ public sealed record TemplateQualityChanged : WhatsAppEvent
     /// <summary>What the rating was.</summary>
     public TemplateQuality Previous { get; init; }
 
+    /// <summary>The raw previous rating, in case Meta sent one this library does not know.</summary>
+    public string? RawPrevious { get; init; }
+
     /// <summary>What it is now.</summary>
     public TemplateQuality Current { get; init; }
+
+    /// <summary>The raw current rating.</summary>
+    public string? RawCurrent { get; init; }
 }
