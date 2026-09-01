@@ -44,6 +44,50 @@ than after: `template.Validate(message)` reports what is missing and what is ext
 call to Meta. See [Checking the values before the
 wave](sending.md#checking-the-values-before-the-wave).
 
+## What a template asks for
+
+`Validate` answers whether a set of values fits. The other question — what the template wants
+in the first place — is `Placeholders()`, and it is the list to put in front of a person:
+
+```csharp
+var template = await whatsApp.Templates.GetAsync(templateId, ct);
+
+// named:    ["first_name", "conference_name"]
+// numbered: ["{{1}}", "{{2}}"]
+Console.WriteLine($"This template expects: {string.Join(", ", template.Placeholders())}");
+```
+
+Same counting rules as the check, and they are not the obvious ones: numbered placeholders are
+counted by the **highest index**, so a body reading `only {{2}}` expects two values, and a
+name repeated in a named template is one substitution. The order is fixed — ascending for
+numbered ones, first appearance for named ones — so the list can be printed, stored, or
+compared with yesterday's.
+
+It reports the **body**, and only the body. A text header carries at most one placeholder and
+so does each URL button, and each is numbered separately from the body: one flat list would
+claim the header's `{{1}}` and the body's `{{1}}` were the same value. Read those from
+`Header` and `Buttons`; `Validate` checks all of them together. An authentication template's
+body has no placeholders — Meta writes that text itself — and still takes one value, the
+passcode.
+
+## Where a button sits
+
+A payload goes to a button's **position among all the buttons**, whatever their kinds, so
+`QuickReplyIndexes()` hands the positions over rather than leaving everyone to count them:
+
+```csharp
+foreach (var index in template.QuickReplyIndexes())
+{
+    components.Add(TemplateComponent.QuickReplyButton(index, payloads[index]));
+}
+```
+
+For a template of nothing but quick replies the position and the payload's own ordinal agree,
+which is exactly why counting by hand survives until the day someone adds a URL button between
+them. After that the positions shift by one without a word: either every message of the wave
+comes back with a bare `100`, or the payload lands on the neighbouring button and a customer
+who tapped one thing is recorded as having tapped another.
+
 Managing templates needs `WhatsAppBusinessAccountId` in configuration; sending messages does
 not. These calls spend the account's management allowance (200 an hour, 5000 once a number is
 registered), which the client paces separately from message throughput.

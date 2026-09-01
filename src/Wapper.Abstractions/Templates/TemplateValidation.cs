@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text.RegularExpressions;
 using Wapper.Messages;
 
 namespace Wapper.Templates;
@@ -61,7 +59,7 @@ public sealed record TemplateIssue
 /// its whole first wave, takes the quality rating down with it and delivers nothing. The
 /// template says everything needed to catch that on the way out of the file it was read from.
 /// </remarks>
-public static partial class TemplateValidation
+public static class TemplateValidation
 {
     /// <summary>
     /// Everything the Cloud API would reject this message for, or an empty list when the
@@ -257,29 +255,27 @@ public static partial class TemplateValidation
         IReadOnlyList<TemplateParameter> parameters,
         List<TemplateIssue> issues)
     {
-        var placeholders = Placeholder().Matches(text)
-            .Select(match => match.Groups[1].Value)
-            .ToList();
+        // The same list a caller gets from Placeholders(), so what is shown and what is
+        // enforced are read off one parser.
+        var expected = TemplateInspection.Placeholders(text, format);
 
         if (format == TemplateParameterFormat.Named)
         {
-            ValidateNamed(placeholders, component, parameters, issues);
+            ValidateNamed(expected, component, parameters, issues);
         }
         else
         {
-            ValidatePositional(placeholders, component, parameters, issues);
+            ValidatePositional(expected, component, parameters, issues);
         }
     }
 
     private static void ValidateNamed(
-        List<string> placeholders,
+        List<string> names,
         TemplateComponentType component,
         IReadOnlyList<TemplateParameter> parameters,
         List<TemplateIssue> issues)
     {
-        // A name repeated in the text is still one substitution: Meta fills every occurrence
-        // from the single value.
-        var expected = new HashSet<string>(placeholders, StringComparer.Ordinal);
+        var expected = new HashSet<string>(names, StringComparer.Ordinal);
         var given = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var parameter in parameters)
@@ -332,17 +328,9 @@ public static partial class TemplateValidation
         IReadOnlyList<TemplateParameter> parameters,
         List<TemplateIssue> issues)
     {
-        // Counted by the highest index, not by how many placeholders appear. A body reading
-        // "only {{2}}" expects two values and Meta rejects one, because it fills by position.
-        var expected = 0;
-
-        foreach (var placeholder in placeholders)
-        {
-            if (int.TryParse(placeholder, NumberStyles.None, CultureInfo.InvariantCulture, out var index))
-            {
-                expected = Math.Max(expected, index);
-            }
-        }
+        // One entry per value the text expects, counted by the highest index rather than by
+        // how many placeholders appear: "only {{2}}" is two of them.
+        var expected = placeholders.Count;
 
         if (parameters.Any(parameter => !string.IsNullOrEmpty(parameter.Name)))
         {
@@ -571,11 +559,4 @@ public static partial class TemplateValidation
         3 => "rd",
         _ => "th",
     };
-
-    /// <remarks>
-    /// Whitespace inside the braces is allowed because Meta allows it, and a template written
-    /// as <c>{{ 1 }}</c> means the same thing as <c>{{1}}</c>.
-    /// </remarks>
-    [GeneratedRegex(@"\{\{\s*([^{}]+?)\s*\}\}", RegexOptions.CultureInvariant)]
-    private static partial Regex Placeholder();
 }
