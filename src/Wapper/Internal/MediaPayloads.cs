@@ -31,6 +31,10 @@ internal sealed class MediaInfoResponse
 /// <summary>Wire shape of the responses that only report whether the call worked.</summary>
 internal sealed class SuccessResponse
 {
+    /// <summary>
+    /// Nullable so a body without the field can be told apart from an explicit refusal: a
+    /// missing field must not read as <c>false</c>.
+    /// </summary>
     [JsonPropertyName("success")]
-    public bool Success { get; set; }
+    public bool? Success { get; set; }
 }

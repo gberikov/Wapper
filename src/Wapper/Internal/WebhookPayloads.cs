@@ -18,6 +18,14 @@ internal sealed class WebhookEntry
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
+    /// <summary>
+    /// Unix seconds. The only timestamp an account-level change — a template verdict, a ban —
+    /// carries at all.
+    /// </summary>
+    [JsonPropertyName("time")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Time { get; set; }
+
     [JsonPropertyName("changes")]
     public List<WebhookChange>? Changes { get; set; }
 }
@@ -81,6 +89,13 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("other_info")]
     public WebhookOtherInfo? OtherInfo { get; set; }
+
+    /// <summary>
+    /// Where the review's own words about a rejection live, rather than in
+    /// <see cref="OtherInfo"/>.
+    /// </summary>
+    [JsonPropertyName("rejection_info")]
+    public WebhookRejectionInfo? RejectionInfo { get; set; }
 
     [JsonPropertyName("previous_quality_score")]
     public string? PreviousQualityScore { get; set; }
@@ -156,6 +171,82 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("user_preferences")]
     public List<WebhookUserPreference>? UserPreferences { get; set; }
+
+    // The same change also arrives flat, with the fields of one preference on `value` itself
+    // and no array at all. Both forms are live, so both are read.
+
+    [JsonPropertyName("wa_id")]
+    public string? WaId { get; set; }
+
+    [JsonPropertyName("detail")]
+    public string? Detail { get; set; }
+
+    [JsonPropertyName("category")]
+    public string? Category { get; set; }
+
+    /// <summary>The preference itself, <c>stop</c> or <c>resume</c>, on the flat form.</summary>
+    [JsonPropertyName("value")]
+    public string? PreferenceValue { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Timestamp { get; set; }
+
+    // Account events. Account-level like the template ones, and carrying a different
+    // sub-object for each of the twenty-odd values `event` can take.
+
+    /// <summary>
+    /// Sent both as an object and as a bare string, so it stays raw until it is read.
+    /// </summary>
+    [JsonPropertyName("phone_number")]
+    public JsonElement PhoneNumber { get; set; }
+
+    [JsonPropertyName("ban_info")]
+    public WebhookBanInfo? BanInfo { get; set; }
+
+    [JsonPropertyName("violation_info")]
+    public WebhookViolationInfo? ViolationInfo { get; set; }
+
+    [JsonPropertyName("restriction_info")]
+    public List<WebhookRestriction>? RestrictionInfo { get; set; }
+}
+
+internal sealed class WebhookBanInfo
+{
+    [JsonPropertyName("waba_ban_state")]
+    public string? WabaBanState { get; set; }
+
+    [JsonPropertyName("waba_ban_date")]
+    public string? WabaBanDate { get; set; }
+}
+
+internal sealed class WebhookViolationInfo
+{
+    [JsonPropertyName("violation_type")]
+    public string? ViolationType { get; set; }
+}
+
+internal sealed class WebhookRestriction
+{
+    [JsonPropertyName("restriction_type")]
+    public string? RestrictionType { get; set; }
+
+    /// <summary>Unix seconds, sent as a number.</summary>
+    [JsonPropertyName("expiration")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? Expiration { get; set; }
+
+    [JsonPropertyName("remediation")]
+    public string? Remediation { get; set; }
+}
+
+internal sealed class WebhookRejectionInfo
+{
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("recommendation")]
+    public string? Recommendation { get; set; }
 }
 
 internal sealed class WebhookUserPreference
@@ -269,6 +360,10 @@ internal sealed class WebhookMessage
 
     [JsonPropertyName("system")]
     public WebhookSystem? System { get; set; }
+
+    /// <summary>Sent when the sender's identity may have changed, if the check is enabled.</summary>
+    [JsonPropertyName("identity")]
+    public WebhookIdentity? Identity { get; set; }
 
     [JsonPropertyName("order")]
     public WebhookOrder? Order { get; set; }
@@ -447,6 +542,25 @@ internal sealed class WebhookButton
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }
+}
+
+/// <summary>
+/// Wire shape of the identity-change notice on a message.
+/// </summary>
+/// <remarks>
+/// Meta's own SDK types <c>acknowledged</c> and <c>created_timestamp</c> as strings while the
+/// platform documentation shows a boolean and a number, so both stay raw until they are read.
+/// </remarks>
+internal sealed class WebhookIdentity
+{
+    [JsonPropertyName("acknowledged")]
+    public JsonElement Acknowledged { get; set; }
+
+    [JsonPropertyName("created_timestamp")]
+    public JsonElement CreatedTimestamp { get; set; }
+
+    [JsonPropertyName("hash")]
+    public string? Hash { get; set; }
 }
 
 internal sealed class WebhookSystem

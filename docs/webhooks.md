@@ -28,16 +28,16 @@ idempotent**, which they have to be anyway: Meta repeats deliveries of its own a
 
 Meta has more than twenty webhook fields and keeps adding to them. The ones this library has
 typed events for arrive as those; anything else arrives as `UnknownEvent` carrying the raw
-`value` object, so an account being offboarded or a customer opting out of marketing leaves a
-trace rather than vanishing:
+`value` object, so a capability change or a security alert leaves a trace rather than
+vanishing:
 
 ```csharp
 builder.Services.AddWhatsAppWebhookHandler<Unhandled, UnknownEvent>();
 ```
 
 The same event is where a field this library *does* know lands when it arrives shaped in a
-way the library could not read, so a handler for it is the one place to learn that anything
-is being discarded.
+way the library could not read — including one that bound cleanly and yielded no event at all.
+A handler for it is the one place to learn that anything is being discarded.
 
 ## Delivery statuses
 
@@ -71,11 +71,94 @@ stop:
 builder.Services.AddWhatsAppWebhookHandler<OptOuts, MarketingPreferenceChanged>();
 ```
 
+## Trouble with the account itself
+
+`AccountUpdated` is where a policy violation, a restriction, a scheduled disablement or a
+deletion arrives. There is no other notice: the next sign is sends failing.
+
+```csharp
+builder.Services.AddWhatsAppWebhookHandler<Compliance, AccountUpdated>();
+```
+
+`Event` is the one to branch on — `AccountViolation`, `AccountRestriction`, `DisabledUpdate`,
+`AccountDeleted` — with `ViolationType`, `Restrictions` and `BanState` carrying the detail.
+Meta sends about twenty events on this field and half of them only mean something to a
+Solution Partner; those arrive with `Event` as `Unknown`, `RawEvent` naming them and `Json`
+holding the body they came in.
+
+## One endpoint for every tenant
+
+`MapWhatsAppWebhook` checks every delivery against one tenant's app secret. That is right when
+the numbers share a Meta app, because then they share the secret. A host whose customers are
+onboarded through *different* apps has a secret each, and no single one of them can verify
+everything arriving on the endpoint. Map this instead:
+
+```csharp
+app.MapWhatsAppWebhookForTenants("/whatsapp");
+```
+
+Each delivery is then matched to a tenant and checked against **that tenant's** `AppSecret`.
+The default match is against the `PhoneNumberId` and `WhatsAppBusinessAccountId` in
+configuration; a host whose tenants live in a database registers its own resolver, the same
+way it replaces `IWhatsAppCredentialsProvider`:
+
+```csharp
+builder.Services.AddSingleton<IWhatsAppWebhookTenantResolver, TenantsFromDatabase>();
+```
+
+```csharp
+public sealed class TenantsFromDatabase(IAccounts accounts) : IWhatsAppWebhookTenantResolver
+{
+    public async ValueTask<string?> ResolveAsync(WhatsAppWebhookOrigin origin, CancellationToken ct) =>
+        // Called once per delivery, before anything in it is trusted. Cache it.
+        await accounts.FindTenantAsync(origin.PhoneNumberId, origin.BusinessAccountId, ct);
+}
+```
+
+Three things this mode has to decide, and does:
+
+- **The body is read before it is verified.** There is no other order available: the signature
+  cannot be checked without a secret, and nothing but the body says which secret. What makes
+  it safe is what that reading is allowed to do — it picks a secret, and the signature still
+  has to verify against it, so a forged `phone_number_id` only ever buys the sender a refusal.
+  The read itself is a forward-only scan for two property names over a body already capped at
+  a megabyte; it builds no object graph and never runs the parser.
+- **A delivery covering tenants on different apps is refused.** Meta signs a delivery once,
+  with one app's secret, so this is not a delivery it could have sent. Verifying it against
+  the first tenant's secret would let the rest in on a signature that says nothing about them.
+  Tenants that share a secret are fine, however many numbers the delivery names.
+- **A `phone_number_id` that matches no tenant is refused**, with a log line naming it. An
+  account-level delivery — a template verdict, an account update — carries no number at all,
+  and falls back to the account on the entry.
+
+The subscription handshake is still checked against the default tenant's `WebhookVerifyToken`:
+a `GET` names no number, so there is nothing to resolve by. That token is one you choose
+rather than one Meta issues, so sharing it costs nothing.
+
+## Deliveries you have already seen
+
+Meta repeats deliveries of its own accord, and repeats every delivery a handler failed for up
+to seven days. Handlers have to be idempotent; the cheapest way to make them so is to
+recognise a repeat and drop it, and the body is already a perfectly good key:
+
+```csharp
+var key = WhatsAppWebhookParser.DeliveryKey(body);
+```
+
+The SHA-256 of the raw body, as 64 hex characters — which is a column with a unique index on
+it. Insert; if it collides, this delivery has been handled, so answer `200` and stop. Two
+genuinely different deliveries cannot collide, because the body carries the message id and the
+timestamp.
+
+Take it over the bytes exactly as they arrived, before anything re-serializes them: a
+reindented body is a different key.
+
 ## Without ASP.NET Core
 
-`WhatsAppWebhookSignature.IsValid` and `WhatsAppWebhookParser.Parse` are in the `Wapper`
-package and take the raw body, so an Azure Function or a queue consumer verifies and parses
-the same way; only the endpoint and the handler dispatch are ASP.NET Core's.
+`WhatsAppWebhookSignature.IsValid`, `WhatsAppWebhookParser.Parse`, `.ReadOrigins` and
+`.DeliveryKey` are all in the `Wapper` package and take the raw body, so an Azure Function or
+a queue consumer verifies, routes, deduplicates and parses the same way; only the endpoint and
+the handler dispatch are ASP.NET Core's.
 
 Nothing arrives at all until the app is subscribed to the account — the step that is easy to
 forget and impossible to debug, because the endpoint looks perfectly healthy without it:
@@ -117,7 +200,7 @@ way.
 | `message_template_quality_update` | Recommended | The warning before a template is paused. → `TemplateQualityChanged` |
 | `flows` | If you use Flows | Status changes and the monitoring alerts that precede them. → `FlowStatusChanged`, `FlowAlert` |
 | `phone_number_name_update` | If display names change | An approved change is the cue to register the number again — without that the new name never takes effect. → `PhoneNumberNameChanged` |
-| `account_update` | Recommended | Policy violations, offboarding, deletion. Arrives as `UnknownEvent`, which is still better than finding out when sends start failing. |
+| `account_update` | Recommended | Policy violations, restrictions, offboarding, deletion. The only place any of that is reported; everything else surfaces as sends failing for reasons that read like a bug. → `AccountUpdated` |
 | `account_alerts`, `business_capability_update`, `message_template_components_update`, `template_category_update`, `security` | Optional | Useful to log; nothing here has to act on them. All arrive as `UnknownEvent`. |
 | `partner_solutions`, `history`, `smb_app_state_sync`, `smb_message_echoes`, `automatic_events`, `payment_configuration_update` | Solution Partners only | Only meaningful to an approved partner onboarding customers, or with a regional payments product. |
 

@@ -57,8 +57,14 @@ public sealed record PhoneNumberQualityChanged : WhatsAppEvent
     /// </summary>
     public MessagingLimitTier PreviousLimit { get; init; }
 
+    /// <summary>The raw previous limit, in case Meta sent a tier this library does not know.</summary>
+    public string? RawPreviousLimit { get; init; }
+
     /// <summary>What the limit is now.</summary>
     public MessagingLimitTier CurrentLimit { get; init; }
+
+    /// <summary>The raw current limit.</summary>
+    public string? RawCurrentLimit { get; init; }
 }
 
 /// <summary>The outcome of reviewing a display name.</summary>

@@ -119,6 +119,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
                     "UTILITY" => ConversationCategory.Utility,
                     _ => ConversationCategory.Unknown,
                 },
+                RawCategory = point.ConversationCategory,
                 Type = point.ConversationType?.ToUpperInvariant() switch
                 {
                     "FREE_ENTRY_POINT" => ConversationType.FreeEntryPoint,
@@ -126,12 +127,14 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
                     "REGULAR" => ConversationType.Regular,
                     _ => ConversationType.Unknown,
                 },
+                RawType = point.ConversationType,
                 Direction = point.ConversationDirection?.ToUpperInvariant() switch
                 {
                     "BUSINESS_INITIATED" => ConversationDirection.BusinessInitiated,
                     "USER_INITIATED" => ConversationDirection.UserInitiated,
                     _ => ConversationDirection.Unknown,
                 },
+                RawDirection = point.ConversationDirection,
             })],
         };
     }
@@ -191,6 +194,7 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
                     "REGULAR" => PricingType.Regular,
                     _ => PricingType.Unknown,
                 },
+                RawType = point.PricingType,
             })],
         };
     }
@@ -251,47 +255,73 @@ internal sealed class AnalyticsApi(GraphApiClient client, string tenant) : IAnal
             .ConfigureAwait(false);
         var accountId = GraphApiClient.RequireBusinessAccount(credentials);
 
-        var response = await client.SendAsync(
-                new GraphRequest
-                {
-                    Tenant = tenant,
-                    Credentials = credentials,
-                    Method = HttpMethod.Get,
-                    Path = $"{accountId}/template_analytics?{parameters}",
-                    Kind = GraphCallKind.Management,
-                    Operation = "analytics.templates",
-                },
-                WhatsAppJsonContext.Default.TemplateAnalyticsResponse,
-                cancellationToken)
-            .ConfigureAwait(false);
+        // An ordinary edge, so it pages like one. Ten templates over ninety days is up to
+        // nine hundred data points, and stopping after the first page would quietly
+        // understate every figure.
+        string? granularity = null;
+        string? reportedProductType = null;
+        string? timeZone = null;
+        var points = new List<TemplateDataPoint>();
+        string? after = null;
 
-        var payload = response.Data is [var first, ..] ? first : null;
+        do
+        {
+            var response = await client.SendAsync(
+                    new GraphRequest
+                    {
+                        Tenant = tenant,
+                        Credentials = credentials,
+                        Method = HttpMethod.Get,
+                        Path = $"{accountId}/template_analytics?{parameters}" +
+                               (after is null ? string.Empty : $"&after={Uri.EscapeDataString(after)}"),
+                        Kind = GraphCallKind.Management,
+                        Operation = "analytics.templates",
+                    },
+                    WhatsAppJsonContext.Default.TemplateAnalyticsResponse,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var payload in response.Data ?? [])
+            {
+                granularity ??= payload.Granularity;
+                reportedProductType ??= payload.ProductType;
+                timeZone ??= payload.WabaTimezone;
+
+                foreach (var point in payload.DataPoints ?? [])
+                {
+                    points.Add(new TemplateDataPoint
+                    {
+                        TemplateId = point.TemplateId,
+                        Start = FromUnix(point.Start),
+                        End = FromUnix(point.End),
+                        Sent = point.Sent,
+                        Delivered = point.Delivered,
+                        Read = point.Read,
+                        Clicked = [.. (point.Clicked ?? []).Select(click => new TemplateButtonClicks
+                        {
+                            Type = click.Type,
+                            ButtonContent = click.ButtonContent,
+                            Count = click.Count,
+                        })],
+                        Cost = [.. (point.Cost ?? []).Select(cost => new TemplateCost
+                        {
+                            Type = cost.Type,
+                            Value = cost.Value,
+                        })],
+                    });
+                }
+            }
+
+            after = response.Paging?.NextCursor;
+        }
+        while (!string.IsNullOrEmpty(after));
 
         return new TemplateAnalytics
         {
-            Granularity = payload?.Granularity,
-            ProductType = payload?.ProductType,
-            TimeZone = payload?.WabaTimezone,
-            DataPoints = [.. (payload?.DataPoints ?? []).Select(point => new TemplateDataPoint
-            {
-                TemplateId = point.TemplateId,
-                Start = FromUnix(point.Start),
-                End = FromUnix(point.End),
-                Sent = point.Sent,
-                Delivered = point.Delivered,
-                Read = point.Read,
-                Clicked = [.. (point.Clicked ?? []).Select(click => new TemplateButtonClicks
-                {
-                    Type = click.Type,
-                    ButtonContent = click.ButtonContent,
-                    Count = click.Count,
-                })],
-                Cost = [.. (point.Cost ?? []).Select(cost => new TemplateCost
-                {
-                    Type = cost.Type,
-                    Value = cost.Value,
-                })],
-            })],
+            Granularity = granularity,
+            ProductType = reportedProductType,
+            TimeZone = timeZone,
+            DataPoints = points,
         };
     }
 

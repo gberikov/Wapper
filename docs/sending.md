@@ -63,6 +63,26 @@ What the customer taps comes back as an `InteractiveReply` carrying the `Id` you
 customer to share where they are — the answer arrives as a `LocationMessage`, exactly as an
 unprompted one would.
 
+Meta's limits on these are tight, and it answers every one of them with a bare `100` that does
+not say which field it objected to. They are checked before the send instead, with a message
+naming the field and its actual length:
+
+| | Reply buttons | List |
+|---|---|---|
+| Body | 1024 | 4096 |
+| Header (text) | 60 | 60 |
+| Footer | 60 | 60 |
+| Buttons / rows | 3 buttons | 10 rows across at most 10 sections |
+| Button or row title | 20 | 24 |
+| Button or row id | 256 | 200 |
+| Row description | — | 72 |
+| Section title | — | 24 |
+| Text on the list button | — | 20 |
+
+The two body limits really do differ; both are Meta's own numbers. Note that a title is what
+the customer reads and is short: plan for `Id` to carry the meaning and the title to carry the
+label.
+
 ## Media
 
 Upload first, then send by id. A link works too, but Meta fetches it at send time, so a slow
@@ -102,4 +122,31 @@ public sealed class Attachments(IWhatsAppClient whatsApp) : IWhatsAppEventHandle
 A media download is the one call that leaves the Graph API host, so where it goes is checked
 before the token is attached: see [what the client refuses to
 do](../README.md#a-few-things-the-client-refuses-to-do).
+
+**Nothing caps how much a download reads.** An upload is measured against Meta's limits and
+refused before it is sent; a download is a stream, and a stream that is capped is not one — so
+the ceiling is yours. `MediaContent.FileSize` and the `Content-Length` behind it are what the
+server said, not a promise about what will arrive, so size a buffer with them and count bytes
+anyway:
+
+```csharp
+await using var media = await whatsApp.Media.DownloadAsync(message.MediaId, ct);
+await using var target = File.Create(path);
+
+var buffer = new byte[81920];
+long total = 0;
+
+for (int read; (read = await media.Content.ReadAsync(buffer, ct)) > 0;)
+{
+    if ((total += read) > MaxAttachmentBytes)
+    {
+        throw new InvalidOperationException("This attachment is larger than we accept.");
+    }
+
+    await target.WriteAsync(buffer.AsMemory(0, read), ct);
+}
+```
+
+Where the ceiling should be is your call and not the library's: an inbox that keeps
+attachments wants a different one from a bot that reads a QR code and throws the image away.
 

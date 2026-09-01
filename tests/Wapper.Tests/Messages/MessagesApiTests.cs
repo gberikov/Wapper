@@ -146,12 +146,13 @@ public class MessagesApiTests
     }
 
     [Fact]
-    public async Task A_location_without_a_name_drops_its_address()
+    public async Task A_location_without_a_name_still_sends_its_address()
     {
         var (messages, handler) = Create();
 
-        // WhatsApp only shows the address underneath a name. Sending one without the other
-        // puts a field on the wire that the recipient never sees.
+        // WhatsApp shows the address only underneath a name, but that is its display rule to
+        // apply. Dropping the field here would lose it from a location merely forwarded on —
+        // the template-parameter location two methods over never dropped it.
         await messages.SendLocationAsync(
             "79000000001",
             new Location { Latitude = 51.5, Longitude = -0.12, Address = "nowhere" },
@@ -159,7 +160,24 @@ public class MessagesApiTests
 
         var location = Body(handler).GetProperty("location");
         Assert.Equal(51.5, location.GetProperty("latitude").GetDouble());
-        Assert.False(location.TryGetProperty("address", out _));
+        Assert.Equal("nowhere", location.GetProperty("address").GetString());
+    }
+
+    [Fact]
+    public async Task An_oversized_location_request_body_is_caught_before_sending()
+    {
+        var (messages, handler) = Create();
+
+        // The same interactive body limit as the button and list messages, and Meta's same
+        // bare 100 when it is passed.
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            messages.SendLocationRequestAsync(
+                "79000000001",
+                new string('b', 1025),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("location request", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
     }
 
     [Fact]

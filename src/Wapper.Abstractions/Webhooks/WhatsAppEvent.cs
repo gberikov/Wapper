@@ -53,7 +53,22 @@ public abstract record IncomingMessage : WhatsAppEvent
     public string? ReplyToMessageId { get; init; }
 
     /// <summary>Whether the customer forwarded this from somewhere else.</summary>
+    /// <remarks>
+    /// Set for both kinds of forward, including the ones
+    /// <see cref="IsFrequentlyForwarded"/> covers.
+    /// </remarks>
     public bool IsForwarded { get; init; }
+
+    /// <summary>
+    /// Whether WhatsApp has seen this content forwarded many times over.
+    /// </summary>
+    /// <remarks>
+    /// Meta reports this separately from an ordinary forward, and it means something else: a
+    /// message forwarded more than five times along a chain, which is what chain letters,
+    /// hoaxes and viral scams look like. WhatsApp itself limits where these can be sent on
+    /// to. Worth its own branch for anything that filters or triages what arrives.
+    /// </remarks>
+    public bool IsFrequentlyForwarded { get; init; }
 
     /// <summary>
     /// The ad or post the customer came from, when they arrived through one.
@@ -70,6 +85,28 @@ public abstract record IncomingMessage : WhatsAppEvent
     /// The catalogue item the customer was looking at when they wrote, when they quoted one.
     /// </summary>
     public ReferredProduct? ReferredProduct { get; init; }
+
+    /// <summary>
+    /// Notice that the sender's identity may have changed — a reinstalled app, a new handset.
+    /// </summary>
+    /// <remarks>
+    /// Only sent for accounts with the identity change check switched on. An application that
+    /// enabled it did so to act on exactly this, so it is surfaced rather than dropped.
+    /// </remarks>
+    public MessageIdentity? Identity { get; init; }
+}
+
+/// <summary>The identity-change notice WhatsApp attaches to a message.</summary>
+public sealed record MessageIdentity
+{
+    /// <summary>Hash of the sender's current identity key.</summary>
+    public string? KeyHash { get; init; }
+
+    /// <summary>Whether the change has been acknowledged, when WhatsApp said.</summary>
+    public bool? Acknowledged { get; init; }
+
+    /// <summary>When the identity changed, when WhatsApp said.</summary>
+    public DateTimeOffset? CreatedAt { get; init; }
 }
 
 /// <summary>Where a customer came from, when they arrived through an ad or a post.</summary>
@@ -336,8 +373,11 @@ public sealed record UnsupportedMessage : IncomingMessage
     /// <summary>The <c>type</c> WhatsApp used.</summary>
     public string Type { get; init; } = string.Empty;
 
-    /// <summary>The error WhatsApp attached, when it said the message was unsupported.</summary>
-    public WhatsAppError? Error { get; init; }
+    /// <summary>The errors WhatsApp attached, when it said why the message was unsupported.</summary>
+    public IReadOnlyList<WhatsAppError> Errors { get; init; } = [];
+
+    /// <summary>The first of <see cref="Errors"/>, which is usually the only one.</summary>
+    public WhatsAppError? Error => Errors.Count > 0 ? Errors[0] : null;
 }
 
 /// <summary>How far along an outgoing message is.</summary>
@@ -433,20 +473,19 @@ public sealed record MessageStatusChanged : WhatsAppEvent
 /// <para>
 /// Usually a webhook field this library has no event for. Meta has more than twenty and adds
 /// to them; this library types the ones it can act on, and anything else would otherwise be
-/// dropped without trace — an account being offboarded, a template's components being
-/// rewritten. It arrives here instead, with the body it came in, so an application can notice
-/// and decide.
+/// dropped without trace — a security alert, a template's components being rewritten. It
+/// arrives here instead, with the body it came in, so an application can notice and decide.
 /// </para>
 /// <para>
 /// Occasionally a field this library does know — <c>messages</c>, say — shaped in a way it
-/// could not read. That lands here too, under the same <see cref="Field"/>, rather than being
-/// dropped: a handler for this event is the one place to find out that something is being
-/// discarded.
+/// could not read, or one that read cleanly and yielded no event at all. Those land here too,
+/// under the same <see cref="Field"/>, rather than being dropped: a handler for this event is
+/// the one place to find out that something is being discarded.
 /// </para>
 /// </remarks>
 public sealed record UnknownEvent : WhatsAppEvent
 {
-    /// <summary>The <c>field</c> of the change, for example <c>account_update</c>.</summary>
+    /// <summary>The <c>field</c> of the change, for example <c>account_alerts</c>.</summary>
     public string Field { get; init; } = string.Empty;
 
     /// <summary>The <c>value</c> object, exactly as it arrived.</summary>

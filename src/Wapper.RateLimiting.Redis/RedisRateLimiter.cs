@@ -209,10 +209,13 @@ internal sealed class RedisRateLimiter(
         }
         catch (Exception exception) when (IsRedisFailure(exception))
         {
+            // The redacted key, not the scope itself: a pair scope's ToString carries the
+            // customer's number in full, and this line ends up in a log.
             logger.LogWarning(
                 exception,
-                "Could not record a rate limit penalty for {Scope} in Redis.",
-                scope);
+                "Could not record a rate limit penalty for the {Budget} scope '{Scope}' in Redis.",
+                scope.Budget,
+                scope.RedactedKey);
 
             if (_options.FallBackToLocal)
             {

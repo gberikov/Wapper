@@ -41,6 +41,12 @@ public sealed record MarketingPreferenceChanged : WhatsAppEvent
     /// <summary>The raw value, in case Meta sent one this library does not know.</summary>
     public string? RawPreference { get; init; }
 
+    /// <summary>
+    /// Which kind of message the decision covers. Only ever <c>marketing_messages</c> so far,
+    /// and worth reading rather than assuming: Meta has said more categories are coming.
+    /// </summary>
+    public string? Category { get; init; }
+
     /// <summary>Meta's own sentence about it, for a log line.</summary>
     public string? Detail { get; init; }
 }

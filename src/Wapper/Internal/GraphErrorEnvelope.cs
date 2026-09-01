@@ -21,6 +21,11 @@ internal sealed class GraphError
     [JsonPropertyName("message")]
     public string? Message { get; set; }
 
+    // Only ever sent on the errors attached to a webhook, never on a response to a call, and
+    // there it is the whole of what Meta says: "Healthy ecosystem" with no message beside it.
+    [JsonPropertyName("title")]
+    public string? Title { get; set; }
+
     // Not fb_trace_id, which is what a snake-case naming policy would produce.
     [JsonPropertyName("fbtrace_id")]
     public string? FbTraceId { get; set; }
@@ -65,6 +70,7 @@ internal static class GraphErrorExtensions
     {
         Code = error.Code,
         Type = error.Type,
+        Title = error.Title,
         Message = error.Message,
         Details = error.ErrorData?.Details,
         TraceId = error.FbTraceId,

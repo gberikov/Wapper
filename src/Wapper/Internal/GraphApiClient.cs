@@ -161,6 +161,32 @@ internal sealed partial class GraphApiClient(
     }
 
     /// <summary>
+    /// Sends a request whose whole answer is whether it worked, and throws when the Cloud
+    /// API says it did not.
+    /// </summary>
+    /// <remarks>
+    /// These endpoints answer <c>{"success": true}</c>. A body without the field is
+    /// tolerated, but an explicit <c>"success": false</c> on a 200 would otherwise complete
+    /// as a success — and a subscription that silently never happened is undebuggable.
+    /// </remarks>
+    public async Task SendAsync(GraphRequest request, CancellationToken cancellationToken)
+    {
+        var response = await SendAsync(
+                request,
+                WhatsAppJsonContext.Default.SuccessResponse,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (response.Success is false)
+        {
+            throw new WhatsAppException(
+                $"The Cloud API answered {request.Method} {request.Path} with " +
+                "\"success\": false and no error object, so the call did not take effect " +
+                "and there is no code to say why.");
+        }
+    }
+
+    /// <summary>
     /// Fetches an absolute URL that is not part of the Graph API surface, presenting the
     /// tenant's token.
     /// </summary>

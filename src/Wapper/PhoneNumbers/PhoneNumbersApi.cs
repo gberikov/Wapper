@@ -106,7 +106,6 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                         payload,
                         WhatsAppJsonContext.Default.TwoStepPinPayload),
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -139,7 +138,6 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     // whoever is looking at the message that already arrived.
                     Retryable = false,
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -165,7 +163,6 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     Kind = GraphCallKind.Management,
                     Operation = "phone_numbers.verify",
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -202,7 +199,6 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     // one of them on an automatic retry is not worth it.
                     Retryable = false,
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -226,7 +222,6 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     // Shares the ten-per-72-hours allowance with registration.
                     Retryable = false,
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -286,7 +281,6 @@ internal sealed class PhoneNumbersApi(GraphApiClient client, string tenant) : IP
                     // the key is PEM, so its newlines have to survive the encoding.
                     Content = GraphContent.Form(("business_public_key", publicKey)),
                 },
-                WhatsAppJsonContext.Default.SuccessResponse,
                 cancellationToken)
             .ConfigureAwait(false);
     }

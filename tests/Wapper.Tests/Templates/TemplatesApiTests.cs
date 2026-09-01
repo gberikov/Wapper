@@ -676,6 +676,48 @@ public class TemplatesApiTests
         Assert.Equal("K2h6uSdG3xY", app.SignatureHash);
     }
 
+    [Fact]
+    public async Task A_component_kind_this_library_does_not_know_survives_reading_and_blocks_an_edit()
+    {
+        const string Page = """
+            {"data":[{"name":"n","language":"en","category":"MARKETING","status":"APPROVED","id":"1",
+              "components":[{"type":"BODY","text":"b"},{"type":"CAROUSEL"}]}]}
+            """;
+        var (templates, _) = Create(Page);
+
+        var template = await Single(templates);
+
+        // The carousel cannot be modelled, but it can be seen.
+        Assert.Equal("CAROUSEL", Assert.Single(template.UnknownComponents));
+
+        // Components are replaced wholesale on an edit, so writing this template back would
+        // erase the carousel at Meta. A typo fix in the body must not cost the card deck.
+        var (editor, handler) = Create(Ok);
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            editor.UpdateAsync("1", template, TestContext.Current.CancellationToken));
+
+        Assert.Contains("CAROUSEL", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task A_quality_spelling_this_library_does_not_know_is_kept_raw()
+    {
+        const string Page = """
+            {"data":[{"name":"n","language":"en","category":"MARKETING","status":"APPROVED","id":"1",
+              "quality_score":{"score":"SUPERB"},
+              "components":[{"type":"BODY","text":"b"}]}]}
+            """;
+        var (templates, _) = Create(Page);
+
+        var template = await Single(templates);
+
+        // A Graph read has no UnknownEvent to fall back on, so the raw string is the only
+        // way a caller can see what Meta actually said.
+        Assert.Equal(TemplateQuality.Unknown, template.QualityScore);
+        Assert.Equal("SUPERB", template.RawQualityScore);
+    }
+
     private static async Task<Template> Single(ITemplatesApi templates)
     {
         var found = new List<Template>();

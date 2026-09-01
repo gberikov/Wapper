@@ -23,6 +23,12 @@ public sealed record Contact
 
     /// <summary>Birthday, formatted as <c>YYYY-MM-DD</c> on the wire.</summary>
     public DateOnly? Birthday { get; init; }
+
+    /// <summary>
+    /// The birthday exactly as it arrived, when it was not a full date — vCards allow
+    /// partial forms such as <c>--05-21</c> that <see cref="Birthday"/> cannot hold.
+    /// </summary>
+    public string? RawBirthday { get; init; }
 }
 
 /// <summary>The parts of a contact's name.</summary>

@@ -109,8 +109,8 @@ internal sealed class Audit(ILogger<Audit> logger) : IWhatsAppEventHandler<Unkno
 {
     public Task HandleAsync(UnknownEvent unknown, CancellationToken ct)
     {
-        // An account being offboarded, a capability changing, or a known field shaped in a
-        // way the library could not read. The body comes with it.
+        // A capability changing, a security alert, or a known field shaped in a way the
+        // library could not read. The body comes with it.
         logger.LogWarning("Unhandled webhook field {Field}: {Json}", unknown.Field, unknown.Json);
 
         return Task.CompletedTask;

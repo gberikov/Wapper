@@ -26,13 +26,25 @@ public interface IMediaApi
     Task<MediaInfo> GetAsync(string mediaId, CancellationToken cancellationToken = default);
 
     /// <summary>Downloads media by id, looking up its URL first.</summary>
-    /// <remarks>The result owns a network response and has to be disposed.</remarks>
+    /// <remarks>
+    /// <para>The result owns a network response and has to be disposed.</para>
+    /// <para>
+    /// <strong>Nothing here caps how much is read.</strong> An upload is checked against
+    /// <see cref="MediaLimits"/> and refused before it is sent; a download is a stream, and a
+    /// stream that is capped is not one. So the ceiling is the caller's: copy with a limit,
+    /// or write to a bounded buffer. <see cref="MediaContent.FileSize"/> and the
+    /// <c>Content-Length</c> it comes from are what the server said, not a promise — read
+    /// them as a hint for sizing, never as the amount that will arrive.
+    /// </para>
+    /// </remarks>
     Task<MediaContent> DownloadAsync(string mediaId, CancellationToken cancellationToken = default);
 
     /// <summary>Downloads media whose location is already known.</summary>
     /// <remarks>
     /// Use this when the URL came from a recent <see cref="GetAsync"/>; it is only good for
-    /// five minutes. The result owns a network response and has to be disposed.
+    /// five minutes. The result owns a network response and has to be disposed, and the
+    /// ceiling on how much is read is the caller's — see
+    /// <see cref="DownloadAsync(string, CancellationToken)"/>.
     /// </remarks>
     Task<MediaContent> DownloadAsync(MediaInfo media, CancellationToken cancellationToken = default);
 

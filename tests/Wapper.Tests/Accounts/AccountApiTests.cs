@@ -94,6 +94,19 @@ public class AccountApiTests
     }
 
     [Fact]
+    public async Task An_explicit_success_false_is_reported_rather_than_swallowed()
+    {
+        // A subscription that silently never happened is undebuggable: the endpoint looks
+        // healthy and simply receives nothing.
+        var handler = StubHttpMessageHandler.Returning(HttpStatusCode.OK, """{"success":false}""");
+
+        var exception = await Assert.ThrowsAsync<WhatsAppException>(() =>
+            CreateAccount(handler).SubscribeAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("success", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_account_group_is_resolvable_on_its_own()
     {
         var services = new ServiceCollection();
