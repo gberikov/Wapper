@@ -3,6 +3,31 @@
 Notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org),
 and each released version is a bare tag on `master`.
 
+## 0.4.0
+
+Two small things `0.3.0` computed inside and did not hand out, so a consumer kept its own copy
+of both.
+
+### Added
+
+- **`Template.Placeholders()`**, the substitutions the body expects: the names for a named
+  template, `{{1}}` through `{{n}}` for a numbered one, each once and in a fixed order. It is
+  the answer to "what does this template want" — the line an operator is shown when a
+  broadcast file does not fit, the list printed beside a template name, the count stored in
+  somebody's table — and it needs the same reading of `{{…}}` that `Validate` was already
+  doing internally, which is why a second parser had grown up outside the library. Both now
+  run on the one function, so what a caller is shown and what is enforced cannot disagree. The
+  body only: a text header carries at most one placeholder and so does each URL button, and
+  each is numbered separately from the body, so one flat list would claim the header's `{{1}}`
+  and the body's `{{1}}` were the same value. `Validate` still checks all of them together.
+- **`Template.QuickReplyIndexes()`**, where each quick-reply button sits among *all* the
+  template's buttons. `Buttons` carries the kinds and anyone can count, which is the trouble:
+  everyone does, and by quick replies alone, because that agrees with the payload's own
+  ordinal for as long as the template has nothing else in it. Add a URL button between two
+  quick replies and the positions shift by one in silence — either the whole wave comes back
+  with a bare `100`, or the payload lands on the neighbouring button and someone who tapped
+  "Not interested" is recorded as having asked to be unsubscribed for good.
+
 ## 0.3.0
 
 `0.2.0` was about fields Meta sends that were being dropped. This one is about knowledge of
