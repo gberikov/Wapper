@@ -39,6 +39,11 @@ Prefer named parameters over numbered ones. Numbered placeholders are matched by
 inserting one renumbers everything after it — in the template *and* in every call site that
 sends it.
 
+Whichever they are, check the values against the template before a broadcast goes out rather
+than after: `template.Validate(message)` reports what is missing and what is extra, without a
+call to Meta. See [Checking the values before the
+wave](sending.md#checking-the-values-before-the-wave).
+
 Managing templates needs `WhatsAppBusinessAccountId` in configuration; sending messages does
 not. These calls spend the account's management allowance (200 an hour, 5000 once a number is
 registered), which the client paces separately from message throughput.

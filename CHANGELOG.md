@@ -3,6 +3,64 @@
 Notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org),
 and each released version is a bare tag on `master`.
 
+## 0.3.0
+
+`0.2.0` was about fields Meta sends that were being dropped. This one is about knowledge of
+the Cloud API that the library either kept to itself or never held at all, so that every
+consumer wrote it out again — and got it slightly wrong, at the scale of a broadcast.
+
+### Added
+
+- **`WhatsAppError.Classify()`**, what a Cloud API error code means, in the Cloud API's own
+  terms: `Transient`, `RateLimited`, `RecipientUnreachable`, `AccountBlocked`,
+  `RequestRejected`, and `Unknown` for a code invented last week. Whoever catches a
+  `WhatsAppApiException` knows `Error.Code` and nothing else, and the question it answers —
+  retry, or is this recipient hopeless, or is the problem the account rather than the person —
+  has one right answer, and Meta has it. The table already existed, as an `internal` in the
+  retry path; it is now public, and `ThrottlePolicy.ShouldRetry` is a caller of it rather than
+  a second copy beside it. It takes a `WhatsAppError`, not an exception, because a message
+  Meta accepts and then fails to deliver reports its code on the webhook, in
+  `MessageStatusChanged.Errors`, where the same decision has to be made and no exception ever
+  arrives. `131042` — the business is not eligible to send, usually an unpaid invoice — is
+  `AccountBlocked` and not a bad number: it was being swept into a general "4xx is hopeless"
+  rule, where one billing problem marked 434 live contacts as failures in nine minutes.
+  `131050`, the customer who opted out, was declared and used in no decision at all; it is now
+  the unreachable recipient it always was.
+- **`Template.Validate(TemplateMessage)`**, the values checked against the template that is
+  about to be filled with them, without a call to Meta. A mismatch is rejected on every single
+  message, so the first wave of a broadcast burns whole. It reports what is missing and what
+  is extra rather than a yes or a no, because the report goes to an operator with a file to
+  fix. It knows the parts that are not guessable: numbered placeholders are counted by the
+  **highest index**, not by how many appear, so a body reading `only {{2}}` expects two
+  values; a name repeated in a named template is one substitution; the format comes from the
+  template's own `ParameterFormat` rather than from what the values happen to look like; a
+  button's index is its position among **all** the buttons, so a URL button between two quick
+  replies is index 1 and calling it a `quick_reply` is a bare `100` every time; a quick reply
+  may be left unfilled, since the payload is the sender's; and an authentication template
+  still takes exactly one body value though Meta writes its body itself.
+- **`MediaKinds.For(mimeType)`**, which of the five kinds of attachment a media type is.
+  `MediaLimits.For` already walked exactly this classification and returned a number instead
+  of the answer, so every sender wrote the rule out again — including the one case nobody
+  guesses, that `image/webp` is a sticker and not an image. The limit is now picked through
+  the mapping rather than beside it. `IncomingMediaKind` is reused deliberately: what arrives
+  and what is sent are the same five kinds.
+- **A raw string beside the last three parsed enums that had none**:
+  `AccountUpdated.RawQualityRating`, `AccountUpdated.RawCurrentLimit` and
+  `Template.RawCategory`. Nine places got one in `0.2.0`; these were missed. Digging a single
+  field back out of `AccountUpdated.Json` is exactly what that release was getting away from,
+  and a Graph read has no raw body to dig in at all.
+
+### Changed
+
+- **The recipient's number is normalised before it is sent.** `To` went out exactly as it was
+  handed over, and how the Cloud API feels about a leading `+` is a question for Meta, not for
+  every caller in turn — so numbers are stored in E.164 and the `+` was being stripped by hand
+  downstream, because nobody wants to find out with a wave of two thousand messages. The
+  client now strips the punctuation of a written-down number — `+`, spaces, hyphens, brackets
+  and dots — and refuses anything else with an `ArgumentException` naming it, rather than
+  letting Meta answer with a bare `100`. The per-recipient rate limit is keyed on the same
+  normalised form, so `+7 700 000 00 01` and `77000000001` no longer get an allowance each.
+
 ## 0.2.0
 
 Everything here came out of putting `0.1.1` into a production service: fields Meta sends that

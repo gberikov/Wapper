@@ -112,8 +112,14 @@ public sealed record AccountUpdated : WhatsAppEvent
     /// <summary>How recipients have been receiving that number's messages, when Meta said.</summary>
     public PhoneNumberQuality QualityRating { get; init; }
 
+    /// <summary>The raw quality string, in case Meta sent one this library does not know.</summary>
+    public string? RawQualityRating { get; init; }
+
     /// <summary>The number's messaging limit, when Meta said.</summary>
     public MessagingLimitTier CurrentLimit { get; init; }
+
+    /// <summary>The raw limit string, in case Meta sent one this library does not know.</summary>
+    public string? RawCurrentLimit { get; init; }
 
     /// <summary>
     /// Where a disablement stands: <c>SCHEDULE_FOR_DISABLE</c>, <c>DISABLE</c> or
