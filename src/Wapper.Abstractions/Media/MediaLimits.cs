@@ -1,3 +1,5 @@
+using Wapper.Webhooks;
+
 namespace Wapper.Media;
 
 /// <summary>
@@ -30,38 +32,17 @@ public static class MediaLimits
 
     /// <summary>The largest upload Meta accepts for the given media type.</summary>
     /// <returns>The limit in bytes, or <see langword="null"/> when the type is unknown.</returns>
-    public static long? For(string mimeType)
+    /// <remarks>
+    /// Which limit applies follows from which kind of attachment the type is, so it is asked
+    /// of <see cref="MediaKinds.For"/> rather than worked out a second time here.
+    /// </remarks>
+    public static long? For(string mimeType) => MediaKinds.For(mimeType) switch
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(mimeType);
-
-        // Anything after a semicolon is a parameter, as in "text/plain; charset=utf-8".
-        var separator = mimeType.IndexOf(';');
-        var type = separator < 0 ? mimeType : mimeType[..separator];
-        type = type.Trim();
-
-        if (type.Equals("image/webp", StringComparison.OrdinalIgnoreCase))
-        {
-            return StickerBytes;
-        }
-
-        if (type.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
-        {
-            return AudioBytes;
-        }
-
-        if (type.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-        {
-            return ImageBytes;
-        }
-
-        if (type.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
-        {
-            return VideoBytes;
-        }
-
-        return type.StartsWith("application/", StringComparison.OrdinalIgnoreCase)
-               || type.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
-            ? DocumentBytes
-            : null;
-    }
+        IncomingMediaKind.Sticker => StickerBytes,
+        IncomingMediaKind.Audio => AudioBytes,
+        IncomingMediaKind.Image => ImageBytes,
+        IncomingMediaKind.Video => VideoBytes,
+        IncomingMediaKind.Document => DocumentBytes,
+        _ => null,
+    };
 }

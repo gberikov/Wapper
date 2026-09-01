@@ -381,12 +381,14 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                 nameof(callbackData));
         }
 
+        var recipient = NormalizeRecipient(to);
+
         var credentials = await client.ResolveCredentialsAsync(tenant, cancellationToken)
             .ConfigureAwait(false);
 
         var payload = new SendMessagePayload
         {
-            To = to,
+            To = recipient,
             CallbackData = callbackData,
             Context = replyToMessageId is null
                 ? null
@@ -407,8 +409,10 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
                     // is exactly the question a trace is opened to answer.
                     Operation = $"messages.send_{payload.Type}",
                     // Named so the pair allowance is counted per conversation. Without it the
-                    // client would pace the phone number and walk straight into 131056.
-                    Recipient = to,
+                    // client would pace the phone number and walk straight into 131056. The
+                    // normalised form, so "+7 700 000 00 01" and "77000000001" share one
+                    // allowance instead of getting one each.
+                    Recipient = recipient,
                     Content = GraphContent.Json(
                         payload,
                         WhatsAppJsonContext.Default.SendMessagePayload),
@@ -433,5 +437,48 @@ internal sealed class MessagesApi(GraphApiClient client, string tenant) : IMessa
             RecipientId = response.Contacts?.FirstOrDefault()?.WaId,
             Status = message.MessageStatus,
         };
+    }
+
+    /// <summary>
+    /// The recipient as the Cloud API wants it: digits, country code first, nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Numbers are stored in E.164, with the leading <c>+</c>, and Meta hands them back on the
+    /// webhook without it. Rather than leave every caller to guess which form the API takes —
+    /// and nobody wants to find out with a wave of two thousand messages — the punctuation of
+    /// a written-down number is stripped here: <c>+</c>, spaces, hyphens, brackets and dots.
+    /// </para>
+    /// <para>
+    /// Anything else is refused rather than sent, because it is not a phone number and Meta
+    /// would answer it with a bare <c>100</c> saying nothing about which field it meant.
+    /// </para>
+    /// </remarks>
+    private static string NormalizeRecipient(string to)
+    {
+        var digits = new char[to.Length];
+        var length = 0;
+
+        foreach (var character in to)
+        {
+            if (char.IsAsciiDigit(character))
+            {
+                digits[length++] = character;
+            }
+            else if (character is not ('+' or ' ' or '-' or '(' or ')' or '.'))
+            {
+                throw new ArgumentException(
+                    $"'{to}' is not a phone number. The Cloud API takes a number in " +
+                    "international format — country code first, no leading zero — and this " +
+                    "client strips the '+', spaces, hyphens, brackets and dots from it.",
+                    nameof(to));
+            }
+        }
+
+        return length > 0
+            ? new string(digits, 0, length)
+            : throw new ArgumentException(
+                $"'{to}' has no digits in it, so there is nobody to send to.",
+                nameof(to));
     }
 }

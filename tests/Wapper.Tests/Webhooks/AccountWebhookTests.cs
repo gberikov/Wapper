@@ -58,6 +58,25 @@ public class AccountWebhookTests
     }
 
     [Fact]
+    public void A_rating_and_a_limit_this_library_does_not_know_arrive_as_Meta_wrote_them()
+    {
+        // Parsing to Unknown and keeping nothing means digging the value back out of the raw
+        // body for one field — which is the thing the raw strings were added to stop.
+        var events = WhatsAppWebhookParser.Parse(Delivery(
+            """
+            {"event":"PHONE_NUMBER_QUALITY_UPDATE","current_limit":"TIER_500K",
+             "phone_number":{"display_phone_number":"77000231088","quality_rating":"CHARTREUSE"}}
+            """));
+
+        var update = Assert.IsType<AccountUpdated>(Assert.Single(events));
+
+        Assert.Equal(PhoneNumberQuality.Unknown, update.QualityRating);
+        Assert.Equal("CHARTREUSE", update.RawQualityRating);
+        Assert.Equal(MessagingLimitTier.Unknown, update.CurrentLimit);
+        Assert.Equal("TIER_500K", update.RawCurrentLimit);
+    }
+
+    [Fact]
     public void A_disablement_carries_the_ban_state()
     {
         var events = WhatsAppWebhookParser.Parse(Delivery(

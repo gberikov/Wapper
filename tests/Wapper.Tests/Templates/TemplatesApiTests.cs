@@ -677,6 +677,24 @@ public class TemplatesApiTests
     }
 
     [Fact]
+    public async Task A_category_this_library_does_not_know_still_reads_back_as_Meta_wrote_it()
+    {
+        // A Graph read has no raw body to fall back on, so a category invented last week was
+        // simply gone. Meta prices and polices each one differently, which is exactly why it
+        // is worth keeping.
+        const string Page = """
+            {"data":[{"name":"n","language":"en","category":"SERVICE","status":"APPROVED","id":"1",
+              "components":[{"type":"BODY","text":"b"}]}]}
+            """;
+        var (templates, _) = Create(Page);
+
+        var template = await Single(templates);
+
+        Assert.Equal(TemplateCategory.Unknown, template.Category);
+        Assert.Equal("SERVICE", template.RawCategory);
+    }
+
+    [Fact]
     public async Task A_component_kind_this_library_does_not_know_survives_reading_and_blocks_an_edit()
     {
         const string Page = """

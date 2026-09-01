@@ -51,11 +51,27 @@ public sealed class Deliveries(IOrders orders) : IWhatsAppEventHandler<MessageSt
         status.Status switch
         {
             MessageDeliveryStatus.Delivered => orders.MarkNotifiedAsync(status.CallbackData!, ct),
-            MessageDeliveryStatus.Failed => orders.MarkUnreachableAsync(status.CallbackData!, status.Errors[0].Code, ct),
+            MessageDeliveryStatus.Failed => FailedAsync(status, ct),
             _ => Task.CompletedTask,
+        };
+
+    private Task FailedAsync(MessageStatusChanged status, CancellationToken ct) =>
+        status.Errors.FirstOrDefault()?.Classify() switch
+        {
+            // The number is not on WhatsApp, or the customer opted out.
+            { Kind: WhatsAppFailureKind.RecipientUnreachable } =>
+                orders.MarkUnreachableAsync(status.CallbackData!, ct),
+
+            // Everything else — an unpaid invoice, a locked account, a template that does not
+            // fit its values — says nothing whatever about this customer.
+            _ => orders.MarkNotSentAsync(status.CallbackData!, ct),
         };
 }
 ```
+
+A failed status is not a bad number. The code that came with it says which of the two it is,
+and `Classify()` is what reads it: see [What a code means](errors.md#what-a-code-means). There
+is no exception to catch here, which is exactly why it works on the error object.
 
 `ConversationExpiresAt` is set on the status that opens a conversation and says when the
 24-hour customer service window closes. It is `null` when Meta did not say.
