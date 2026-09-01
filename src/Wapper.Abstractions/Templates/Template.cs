@@ -460,6 +460,13 @@ public sealed record Template
     /// <summary>Which category it was filed under.</summary>
     public required TemplateCategory Category { get; init; }
 
+    /// <summary>The raw category string, in case Meta sent one this library does not know.</summary>
+    /// <remarks>
+    /// Read only. A category this library has no name for still has to be told apart from the
+    /// three it does, because Meta prices and polices each one differently.
+    /// </remarks>
+    public string? RawCategory { get; init; }
+
     /// <summary>Where it stands with review. Only <see cref="TemplateStatus.Approved"/> can be sent.</summary>
     public TemplateStatus Status { get; init; }
 

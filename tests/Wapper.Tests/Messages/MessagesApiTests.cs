@@ -702,6 +702,37 @@ public class MessagesApiTests
         Assert.False(Body(handler).TryGetProperty("biz_opaque_callback_data", out _));
     }
 
+    [Theory]
+    [InlineData("+77000000001")]
+    [InlineData("+7 700 000 00 01")]
+    [InlineData("+7 (700) 000-00-01")]
+    [InlineData("77000000001")]
+    public async Task A_number_written_the_way_people_store_it_is_sent_the_way_Meta_wants_it(string to)
+    {
+        // Numbers live in E.164, with the plus. Meta hands them back on the webhook without
+        // one, and nobody wants to discover which form it takes with a wave of two thousand
+        // messages, so the punctuation comes off here.
+        var (messages, handler) = Create();
+
+        await messages.SendTextAsync(to, "hello", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("77000000001", Body(handler).GetProperty("to").GetString());
+    }
+
+    [Fact]
+    public async Task Something_that_is_not_a_phone_number_is_refused_before_it_is_sent()
+    {
+        var (messages, _) = Create();
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            messages.SendTextAsync(
+                "pablo@example.com",
+                "hello",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("pablo@example.com", exception.Message, StringComparison.Ordinal);
+    }
+
     private static JsonElement Body(StubHttpMessageHandler handler) =>
         JsonDocument.Parse(Assert.Single(handler.Bodies)!).RootElement;
 

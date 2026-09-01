@@ -137,6 +137,7 @@ internal static class TemplateMapping
             Name = payload.Name ?? string.Empty,
             Language = payload.Language ?? string.Empty,
             Category = ParseCategory(payload.Category),
+            RawCategory = payload.Category,
             Status = ParseStatus(payload.Status),
             RawStatus = payload.Status,
             SubCategory = payload.SubCategory,

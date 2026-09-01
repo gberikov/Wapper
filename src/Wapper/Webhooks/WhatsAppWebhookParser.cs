@@ -520,6 +520,7 @@ public static class WhatsAppWebhookParser
         // live, and the string one is what Meta's own test delivery sends.
         var number = value.PhoneNumber;
         var nested = number.ValueKind == JsonValueKind.Object;
+        var quality = nested ? Property(number, "quality_rating") : null;
 
         return new AccountUpdated
         {
@@ -528,9 +529,10 @@ public static class WhatsAppWebhookParser
             Event = ParseAccountEvent(value.Event),
             RawEvent = value.Event,
             PhoneNumber = nested ? Property(number, "display_phone_number") : Text(number),
-            QualityRating = PhoneNumberMapping.ParseQuality(
-                nested ? Property(number, "quality_rating") : null),
+            QualityRating = PhoneNumberMapping.ParseQuality(quality),
+            RawQualityRating = quality,
             CurrentLimit = PhoneNumberMapping.ParseTier(value.CurrentLimit),
+            RawCurrentLimit = value.CurrentLimit,
             BanState = value.BanInfo?.WabaBanState,
             BanDate = value.BanInfo?.WabaBanDate,
             ViolationType = value.ViolationInfo?.ViolationType,
