@@ -3,7 +3,7 @@
 Notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org),
 and each released version is a bare tag on `master`.
 
-## Unreleased
+## 0.5.0
 
 The findings of a review of the transport, the limiter and the webhook parser, fixed
 together. Nothing here changes what a call sends to Meta; it changes what happens around it
