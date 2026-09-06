@@ -30,7 +30,22 @@ when Meta is slow, says no, or sends something new.
   the permits spent, so the next caller paid for a call that never went. Cancelled
   reservations now return their permits in every budget, and in the in-memory limiter the
   queue behind them moves up. A cancellation while the Redis script is already running is
-  awaited rather than abandoned, and the permits handed back afterwards.
+  awaited rather than abandoned, and the permits handed back afterwards. The shared limiter
+  returns a permit only at the tail of the queue: handing back a place from the middle would
+  give a newcomer the same turn as somebody already waiting for it, so an interior
+  cancellation leaves its permit spent and it refills at the configured rate.
+- **`MaxWait` is now the whole wait, not the first estimate of it.** A call re-prices its
+  reservations when its wait runs out, and a penalty recorded meanwhile pushes them back —
+  which used to extend the wait without limit, past the ceiling the caller set. Sleeps are
+  capped by what is left of `MaxWait`, and a call still not due at that deadline is refused
+  and hands its permits back. The deadline is checked against a fresh reading rather than a
+  stale one: a Redis answer that took a moment to arrive may already be out of date, and a
+  permit that has come due in the meantime is granted. Both limiters.
+- **A short `KeyLifetime` can no longer expire a reservation that is still waiting.** Redis
+  keys were kept alive for a penalty but not for the refill a granted call was waiting on,
+  nor for a call waiting on a different budget of the same send — so a lifetime shorter than
+  the wait dropped live state and handed the allowance out twice. Keys now outlive both, with
+  a minute of grace for a delayed caller.
 - **An idle budget is no longer forgotten before it has recovered.** The in-memory limiter
   dropped any bucket untouched for ten minutes, so a two-hundred-an-hour account allowance
   spent in full came back as a full two hundred eleven minutes later. A bucket now goes only
@@ -94,9 +109,11 @@ when Meta is slow, says no, or sends something new.
   of one call is spent by one script. Without one the first paced call now fails with a
   `WhatsAppConfigurationException` naming the setting, instead of a warning about Redis
   being away and a silent fall back to per-process pacing. See [docs/redis.md](docs/redis.md).
-- **The Redis budget hash carries two more fields**, the count of permits earned and the
-  rate. An older instance ignores them and a newer one treats their absence as a fresh
-  budget, so a rolling deployment mixes the two safely.
+- **The Redis budget hash carries four more fields**: the count of permits earned, the rate
+  and burst, and how long a granted call needs the state kept. An older instance ignores
+  them and a newer one treats their absence as a fresh budget, so the two run side by side
+  through a rolling deployment — but the guarantees about cancellation and retention only
+  hold once every instance is on this version.
 - **After a rejection the client waits its own backoff plus `MaxWait`**, rather than the
   larger of the two, because the hold drains the bucket and the call owes its place in the
   queue on top of it.

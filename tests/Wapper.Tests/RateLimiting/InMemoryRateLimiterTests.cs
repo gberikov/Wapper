@@ -9,6 +9,45 @@ public class InMemoryRateLimiterTests
     private static readonly TimeSpan Forever = TimeSpan.FromDays(1);
 
     [Fact]
+    public async Task A_new_penalty_cannot_extend_a_wait_past_its_original_budget()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.PhoneNumberThroughput("deadline");
+        var budgets = new[] { new RateLimitRequest(scope, 1, 1) };
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+
+        var queued = limiter.WaitAsync(budgets, TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken).AsTask();
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        var error = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(() => queued);
+        Assert.Equal(scope, error.Scope);
+
+        // Refusal also returns the reservation: after the hold, one earned permit suffices.
+        time.Advance(TimeSpan.FromSeconds(10));
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Rechecking_uses_the_remaining_wait_budget_not_a_fresh_one()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.PhoneNumberThroughput("elapsed-deadline");
+        var budgets = new[] { new RateLimitRequest(scope, 1, 1) };
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+        var queued = limiter.WaitAsync(budgets, TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken).AsTask();
+        time.Advance(TimeSpan.FromMilliseconds(500));
+        await limiter.PenaliseAsync(scope, TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMilliseconds(500));
+
+        // 1.5 seconds still owed, but only one second left in the original two seconds.
+        var error = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(() => queued);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), error.RetryAfter);
+    }
+
+    [Fact]
     public async Task A_call_within_every_budget_does_not_wait()
     {
         var time = new FakeTimeProvider();

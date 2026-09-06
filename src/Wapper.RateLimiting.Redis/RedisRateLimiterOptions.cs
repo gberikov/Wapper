@@ -12,9 +12,9 @@ public sealed class RedisRateLimiterOptions
     /// How long an untouched budget survives in Redis.
     /// </summary>
     /// <remarks>
-    /// A budget nobody has spent for this long is full anyway, so forgetting it costs
-    /// nothing and keeps one key per recipient from accumulating forever. A budget under
-    /// penalty always outlives its penalty regardless of this value.
+    /// A minimum idle lifetime. The limiter extends it until the budget can refill and
+    /// every granted call's maximum wait has elapsed, including a grace period for delayed
+    /// callers. Penalties extend it too, so expiration cannot discard live reservations.
     /// </remarks>
     public TimeSpan KeyLifetime { get; set; } = TimeSpan.FromHours(1);
 

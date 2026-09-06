@@ -26,8 +26,17 @@ becoming a messaging outage. Set `FallBackToLocal = false` to make it fatal inst
 A call that is granted at once costs one round trip: one Lua script prices and spends every
 budget of the call atomically. A call that has to wait makes one more when its wait runs
 out, to ask whether anything changed while it slept, and one more per penalty that arrived
-while it did. A call cancelled while waiting makes one to hand its permits back. There is no
-polling.
+while it did. Sleeps are capped by the time left in the original `MaxWait`. At the deadline,
+the limiter rechecks Redis before refusing: an estimate in a delayed response may already
+be out of date. A new penalty cannot extend the sleep deadline, but Redis round trips can
+delay completion. Cancellation or exceeding the deadline makes one round trip to return
+permits that can safely be reused. A future permit inside the queue stays spent if later
+reservations exist, because returning it would give a newcomer an existing waiter's place.
+The unused permit refills at the configured rate. There is no polling.
+
+`KeyLifetime` is a minimum: keys survive until their budgets can refill and the maximum
+waits of granted calls have elapsed, with a one-minute grace period for delayed callers.
+Penalties extend retention too. A short configured lifetime cannot erase a live reservation.
 
 ## Redis Cluster
 
@@ -54,7 +63,7 @@ which is shared by every number on the app; the limiter therefore does not offer
 
 Change the prefix on every instance at the same time. An instance on the old prefix and one
 on the new pace against different keys, and together they spend the allowance twice. The old
-keys expire on their own after `KeyLifetime`.
+keys expire on their own after their retention period.
 
 The test suite exercises this against Redis in cluster mode — one node holding every slot,
 which is enough to enforce the rule — and checks both halves: the refusal without a hash tag
@@ -66,7 +75,7 @@ them; it is not run here.
 
 One hash per budget, under `{KeyPrefix}{Budget}:{Key}` — a pair budget is keyed by a digest
 of the customer's number rather than the number itself. The fields are the balance, the
-count of permits earned so far, the rate, when they were last brought up to date and when a
-hold ends. Version 0.5.0 added the count and the rate; an older instance reads and writes the
-same keys without them, and a newer one treats their absence as a fresh budget, so the two
-can run side by side through a rolling deployment.
+count of permits earned so far, the rate and burst, when they were last brought up to date,
+when a hold ends, and how long granted calls need the state retained. Older keys acquire the
+additional retention fields on their next grant. All instances need the corrected limiter
+before cancellation and retention guarantees apply across the deployment.

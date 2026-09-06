@@ -52,6 +52,7 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
 
         Sweep();
 
+        var started = time.GetTimestamp();
         var reservations = new TokenBucket.Reservation?[requests.Count];
 
         try
@@ -65,9 +66,15 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
             {
                 var wait = TimeSpan.Zero;
 
-                foreach (var reservation in reservations)
+                for (var i = 0; i < reservations.Length; i++)
                 {
+                    var reservation = reservations[i];
                     var remaining = reservation!.Bucket.WaitFor(reservation);
+
+                    if (remaining > TimeSpan.Zero && remaining > maxWait - time.GetElapsedTime(started))
+                    {
+                        throw new WhatsAppRateLimitedException(requests[i].Scope, remaining, maxWait);
+                    }
 
                     if (remaining > wait)
                     {

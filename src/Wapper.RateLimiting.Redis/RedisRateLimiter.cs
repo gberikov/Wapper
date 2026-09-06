@@ -104,7 +104,16 @@ internal sealed class RedisRateLimiter(
           if hold > now and (hold - now) + 60000 > expiry then
             expiry = (hold - now) + 60000
           end
-          redis.call('PEXPIRE', key, expiry)
+          local balance = tonumber(redis.call('HGET', key, 't')) or 0
+          local rate = tonumber(redis.call('HGET', key, 'r'))
+          local burst = tonumber(redis.call('HGET', key, 'b'))
+          if rate ~= nil and burst ~= nil and rate < 1000000000 then
+            expiry = math.max(expiry, math.max(0, hold - now) + math.max(0, burst - balance) / rate + 60000)
+          end
+          -- A call can wait on another budget longer than this one takes to refill.
+          local lease = tonumber(redis.call('HGET', key, 'l')) or 0
+          expiry = math.max(expiry, lease - now)
+          redis.call('PEXPIRE', key, math.ceil(expiry))
         end
         """;
 
@@ -119,7 +128,7 @@ internal sealed class RedisRateLimiter(
     /// </para>
     /// <para>
     /// Returns whether the permits were taken, the longest wait they imply in milliseconds,
-    /// the one-based position of the budget that refused, and then — for a grant — the count
+    /// the one-based position of the budget with the longest wait (or the one that refused), and then — for a grant — the count
     /// of earned permits each budget has to reach before this call's permit is due. The wait
     /// is reported on a refusal too, so the caller can say how long it would have had to
     /// wait. A wait is the hold that is in force plus the deficit after it, because nothing
@@ -136,6 +145,7 @@ internal sealed class RedisRateLimiter(
 
         local wait = 0
         local tokens = {}
+        local limiting = 1
         local holds = {}
         local counts = {}
         local targets = {}
@@ -152,7 +162,10 @@ internal sealed class RedisRateLimiter(
             return {0, math.floor(budgetWait), i}
           end
 
-          if budgetWait > wait then wait = budgetWait end
+          if budgetWait > wait then
+            wait = budgetWait
+            limiting = i
+          end
 
           local deficit = 0
           if t < 1 then deficit = 1 - t end
@@ -165,10 +178,13 @@ internal sealed class RedisRateLimiter(
 
         -- Second pass: nothing refused, so spend them all. The rate is written alongside so
         -- a penalty, which knows nothing about rates, can bring the budget up to date.
-        local result = {1, math.floor(wait), 0}
+        local result = {1, math.ceil(wait), limiting}
         for i = 1, #KEYS do
           local ratePerMs = tonumber(ARGV[2 + (i * 2)])
-          redis.call('HSET', KEYS[i], 't', tokens[i], 's', now, 'h', holds[i], 'a', counts[i], 'r', ratePerMs)
+          local lease = tonumber(redis.call('HGET', KEYS[i], 'l')) or 0
+          lease = math.max(lease, now + maxWait + 60000)
+          redis.call('HSET', KEYS[i], 't', tokens[i], 's', now, 'h', holds[i], 'a', counts[i], 'r', ratePerMs,
+            'b', tonumber(ARGV[1 + (i * 2)]), 'l', lease)
           expire(KEYS[i], holds[i], now, ttl)
           -- As text: a number handed back from Lua is truncated to an integer.
           result[3 + i] = string.format('%.17g', targets[i])
@@ -191,6 +207,7 @@ internal sealed class RedisRateLimiter(
         local now = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
 
         local wait = 0
+        local limiting = 1
 
         for i = 1, #KEYS do
           local burst = tonumber(ARGV[(i * 3) - 2])
@@ -205,25 +222,32 @@ internal sealed class RedisRateLimiter(
           end
           if hold > now then budgetWait = budgetWait + (hold - now) end
 
-          if budgetWait > wait then wait = budgetWait end
+          if budgetWait > wait then
+            wait = budgetWait
+            limiting = i
+          end
         end
 
-        return math.ceil(wait)
+        return {math.ceil(wait), limiting}
         """;
 
     /// <summary>
-    /// Gives back the permit a call took from every budget, when it gave up waiting.
+    /// Returns permits that can safely be reused when a call gives up waiting.
     /// </summary>
     /// <remarks>
-    /// The balance goes up by one, capped at the burst. Whoever is queued behind keeps the
-    /// target it was given, so it waits its full turn rather than moving up; nothing is
-    /// handed out twice, which is the half that matters.
+    /// Refund a future permit only at the tail: reusing a cancelled place inside the queue
+    /// would give a newcomer the same target as an existing waiter. Interior cancellations
+    /// conservatively leave their permit spent; it refills at the configured rate.
     /// </remarks>
     private const string ReturnScript = """
         for i = 1, #KEYS do
-          local burst = tonumber(ARGV[i])
+          local burst = tonumber(ARGV[(i * 2) - 1])
+          local target = tonumber(ARGV[i * 2])
           local t = tonumber(redis.call('HGET', KEYS[i], 't'))
-          if t ~= nil then
+          local accrued = tonumber(redis.call('HGET', KEYS[i], 'a')) or 0
+          -- The target and balance travel through separate floating-point serializations.
+          -- Allow rounding noise when recognizing the tail; queued targets are one permit apart.
+          if t ~= nil and (t >= 0 or target >= accrued - t - 0.0000001) then
             t = t + 1
             if t > burst then t = burst end
             redis.call('HSET', KEYS[i], 't', t)
@@ -271,9 +295,7 @@ internal sealed class RedisRateLimiter(
 
         redis.call('HSET', KEYS[1], 't', t, 's', now, 'h', hold, 'a', accrued)
 
-        local expiry = ttl
-        if (hold - now) + 60000 > expiry then expiry = (hold - now) + 60000 end
-        redis.call('PEXPIRE', KEYS[1], expiry)
+        expire(KEYS[1], hold, now, ttl)
 
         return 1
         """;
@@ -292,6 +314,7 @@ internal sealed class RedisRateLimiter(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(requests);
+        var started = time.GetTimestamp();
 
         if (requests.Count == 0)
         {
@@ -327,7 +350,7 @@ internal sealed class RedisRateLimiter(
         {
             // Nothing was spent: the script prices every budget before it writes any of them.
             throw new WhatsAppRateLimitedException(
-                requests[result.RefusedIndex].Scope,
+                requests[result.LimitingIndex].Scope,
                 result.Wait,
                 maxWait);
         }
@@ -337,16 +360,46 @@ internal sealed class RedisRateLimiter(
             cancellationToken.ThrowIfCancellationRequested();
 
             var wait = result.Wait;
+            var limiting = result.LimitingIndex;
 
             while (wait > TimeSpan.Zero)
             {
-                await Task.Delay(wait, time, cancellationToken).ConfigureAwait(false);
-                wait = await RecheckAsync(keys, requests, result.Targets).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                var estimateReceived = time.GetTimestamp();
+                var remaining = maxWait - time.GetElapsedTime(started);
+                if (remaining > TimeSpan.Zero)
+                {
+                    await Task.Delay(wait < remaining ? wait : remaining, time, cancellationToken).ConfigureAwait(false);
+                }
+
+                // Redis priced the wait before its response travelled back. It may
+                // already be due, even when that stale estimate exceeds our remaining
+                // time. Refuse only on a recheck issued at or after the deadline.
+                var deadlineReached = time.GetElapsedTime(started) >= maxWait;
+                var rechecked = await RecheckAsync(keys, requests, result.Targets).ConfigureAwait(false);
+                if (rechecked is not { } current)
+                {
+                    // A capped sleep may not have served the last estimate in full.
+                    // Redis being unavailable must not release that permit early.
+                    wait -= time.GetElapsedTime(estimateReceived);
+                    if (wait > TimeSpan.Zero)
+                    {
+                        throw new WhatsAppRateLimitedException(requests[limiting].Scope, wait, maxWait);
+                    }
+
+                    break;
+                }
+
+                (wait, limiting) = current;
+                if (deadlineReached && wait > TimeSpan.Zero)
+                {
+                    throw new WhatsAppRateLimitedException(requests[limiting].Scope, wait, maxWait);
+                }
             }
         }
-        catch (OperationCanceledException)
+        catch (Exception exception) when (exception is OperationCanceledException or WhatsAppRateLimitedException)
         {
-            await ReturnAsync(keys, requests).ConfigureAwait(false);
+            await ReturnAsync(keys, requests, result.Targets).ConfigureAwait(false);
             throw;
         }
     }
@@ -448,7 +501,7 @@ internal sealed class RedisRateLimiter(
         }
 
         var granted = (long)result[0] == 1;
-        var refused = (int)result[2];
+        var limiting = (int)result[2];
 
         if (granted && result.Length != 3 + requests.Count)
         {
@@ -464,8 +517,8 @@ internal sealed class RedisRateLimiter(
         return new AcquireResult(
             granted,
             TimeSpan.FromMilliseconds((long)result[1]),
-            // Lua counts from one, and reports zero when nothing refused.
-            refused > 0 ? refused - 1 : 0,
+            // Lua counts from one.
+            limiting - 1,
             targets);
     }
 
@@ -473,11 +526,10 @@ internal sealed class RedisRateLimiter(
     /// Asks how much longer the permits already taken have to wait.
     /// </summary>
     /// <remarks>
-    /// A Redis that cannot answer here is not fatal: the permits are spent and the estimate
-    /// they came with has been waited out, so the call goes on that estimate, which is what
-    /// it would have done before the question was ever asked.
+    /// Null means Redis could not answer. The caller may proceed on its last estimate
+    /// only if it has waited that estimate out in full.
     /// </remarks>
-    private async Task<TimeSpan> RecheckAsync(
+    private async Task<(TimeSpan Wait, int Limiting)?> RecheckAsync(
         RedisKey[] keys,
         IReadOnlyList<RateLimitRequest> requests,
         double[] targets)
@@ -493,31 +545,37 @@ internal sealed class RedisRateLimiter(
 
         try
         {
-            var wait = (long)await redis.GetDatabase()
+            var result = (RedisValue[]?)await redis.GetDatabase()
                 .ScriptEvaluateAsync(RecheckScript, keys, values)
                 .ConfigureAwait(false);
 
-            return wait > 0 ? TimeSpan.FromMilliseconds(wait) : TimeSpan.Zero;
+            if (result is not { Length: 2 })
+            {
+                throw Unexpected();
+            }
+
+            return (TimeSpan.FromMilliseconds((long)result[0]), (int)result[1] - 1);
         }
         catch (Exception exception) when (IsRedisFailure(exception))
         {
             logger.LogWarning(
                 exception,
                 "Could not ask Redis whether a paced call is still held back; proceeding on the " +
-                "wait it was first given.");
+                "last wait estimate only if it has been waited out.");
 
-            return TimeSpan.Zero;
+            return null;
         }
     }
 
     /// <summary>Hands back what a cancelled call took. Best effort: the caller is leaving.</summary>
-    private async Task ReturnAsync(RedisKey[] keys, IReadOnlyList<RateLimitRequest> requests)
+    private async Task ReturnAsync(RedisKey[] keys, IReadOnlyList<RateLimitRequest> requests, double[] targets)
     {
-        var values = new RedisValue[requests.Count];
+        var values = new RedisValue[requests.Count * 2];
 
         for (var i = 0; i < requests.Count; i++)
         {
-            values[i] = BurstOf(requests[i]);
+            values[i * 2] = BurstOf(requests[i]);
+            values[(i * 2) + 1] = targets[i].ToString("R", CultureInfo.InvariantCulture);
         }
 
         try
@@ -611,5 +669,5 @@ internal sealed class RedisRateLimiter(
         _ => "Unknown",
     };
 
-    private readonly record struct AcquireResult(bool Granted, TimeSpan Wait, int RefusedIndex, double[] Targets);
+    private readonly record struct AcquireResult(bool Granted, TimeSpan Wait, int LimitingIndex, double[] Targets);
 }
