@@ -56,9 +56,11 @@ Change the prefix on every instance at the same time. An instance on the old pre
 on the new pace against different keys, and together they spend the allowance twice. The old
 keys expire on their own after `KeyLifetime`.
 
-This mode is verified against the cluster rules in Redis's own documentation and the
-`CROSSSLOT` error a cluster returns; it has not been exercised against a live cluster in this
-repository's test suite, which runs against a single Redis.
+The test suite exercises this against Redis in cluster mode — one node holding every slot,
+which is enough to enforce the rule — and checks both halves: the refusal without a hash tag
+names the setting, and with one a grant and a penalty land on the same slot. A cluster of
+several nodes behaves the same way for the limiter, since every key of a call is on one of
+them; it is not run here.
 
 ## What is stored
 

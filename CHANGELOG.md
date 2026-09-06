@@ -78,6 +78,15 @@ when Meta is slow, says no, or sends something new.
   library does not know is still readable, as it already was on the phone number events.
 - **[What is covered](docs/coverage.md)**: the endpoints and webhook fields this library
   types, with their variants and tests, and what it does not.
+- **A Native AOT smoke test**, `samples/Wapper.AotSmoke`, published ahead of time and run by
+  CI on Linux: the container, source-generated JSON, the webhook endpoint with its signature
+  check, parsing, dispatch and the client, in one trimmed binary. Building the libraries with
+  `IsAotCompatible` only said the analysers found nothing; this runs it.
+- **Benchmarks**, `benchmarks/Wapper.Benchmarks`, for webhook parsing, the in-memory limiter
+  and upload buffering, with the figures and the machine they were taken on in
+  [docs/performance.md](docs/performance.md).
+- **Redis Cluster tests**, against a single node in cluster mode, for both the refusal
+  without a hash tag and the working configuration with one.
 
 ### Changed
 
