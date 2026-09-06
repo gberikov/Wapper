@@ -305,6 +305,26 @@ public sealed record FlowReply : IncomingMessage
     /// matched to the customer and the thing they were doing.
     /// </remarks>
     public string ResponseJson { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Reads the answers as a type of your own.
+    /// </summary>
+    /// <typeparam name="TResponse">
+    /// A type shaped like the Flow's own answers. The shape is the Flow's, not WhatsApp's,
+    /// so it is yours to declare.
+    /// </typeparam>
+    /// <param name="typeInfo">
+    /// Metadata for the type from a <see cref="System.Text.Json.Serialization.JsonSerializerContext"/>
+    /// of your own, so the read works under trimming and Native AOT.
+    /// </param>
+    /// <returns>The answers, or <see langword="null"/> when the document was <c>null</c>.</returns>
+    /// <exception cref="System.Text.Json.JsonException">The answers are not shaped as the type says.</exception>
+    public TResponse? ReadResponse<TResponse>(System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> typeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
+        return System.Text.Json.JsonSerializer.Deserialize(ResponseJson, typeInfo);
+    }
 }
 
 /// <summary>An order a customer placed from a catalogue.</summary>
@@ -362,11 +382,19 @@ public sealed record SystemMessage : IncomingMessage
 }
 
 /// <summary>
-/// A message this library has no typed form for.
+/// A message WhatsApp itself could not deliver in full, and says so.
 /// </summary>
 /// <remarks>
-/// Meta adds message types without warning. They arrive here rather than being dropped, so
-/// an application can notice and decide what to do.
+/// <para>
+/// The documented <c>unsupported</c> message type: the customer sent something the Cloud
+/// API does not carry — a poll, a payment, a message type newer than the API — and Meta
+/// reports the fact with an error saying which. A media message whose file could not be
+/// fetched lands here too, under its own type, with the error Meta attached to it.
+/// </para>
+/// <para>
+/// Not to be confused with <see cref="UnknownMessage"/>, which is a message Meta delivered
+/// in full and this library has no typed form for.
+/// </para>
 /// </remarks>
 public sealed record UnsupportedMessage : IncomingMessage
 {
@@ -378,6 +406,37 @@ public sealed record UnsupportedMessage : IncomingMessage
 
     /// <summary>The first of <see cref="Errors"/>, which is usually the only one.</summary>
     public WhatsAppError? Error => Errors.Count > 0 ? Errors[0] : null;
+}
+
+/// <summary>
+/// A message this library has no typed form for, delivered whole.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Meta adds message types and interactive reply types without warning. One arrives here
+/// rather than being dropped, with everything it carried: the envelope is read as for any
+/// other message — who sent it, when, in reply to what — and the message object itself is
+/// kept in <see cref="Json"/> for the application to read with a type of its own.
+/// </para>
+/// <para>
+/// A message of a type this library does know but could not read — a <c>text</c> without a
+/// body, a <c>reaction</c> without a message id — lands here as well, under that type, for
+/// the same reason: the alternative is silence.
+/// </para>
+/// </remarks>
+public sealed record UnknownMessage : IncomingMessage
+{
+    /// <summary>The <c>type</c> WhatsApp used, for example <c>interactive</c>.</summary>
+    public string Type { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The <c>interactive.type</c>, when the message was an interactive reply of a kind
+    /// this library does not know. <see langword="null"/> otherwise.
+    /// </summary>
+    public string? InteractiveType { get; init; }
+
+    /// <summary>The message object, exactly as it arrived.</summary>
+    public string Json { get; init; } = string.Empty;
 }
 
 /// <summary>How far along an outgoing message is.</summary>
@@ -480,7 +539,9 @@ public sealed record MessageStatusChanged : WhatsAppEvent
 /// Occasionally a field this library does know — <c>messages</c>, say — shaped in a way it
 /// could not read, or one that read cleanly and yielded no event at all. Those land here too,
 /// under the same <see cref="Field"/>, rather than being dropped: a handler for this event is
-/// the one place to find out that something is being discarded.
+/// the one place to find out that something is being discarded. When the trouble was one
+/// item of a <c>messages</c> or <c>statuses</c> array, <see cref="Json"/> is that item alone
+/// and the items around it are delivered as the events they are.
 /// </para>
 /// </remarks>
 public sealed record UnknownEvent : WhatsAppEvent
@@ -488,7 +549,10 @@ public sealed record UnknownEvent : WhatsAppEvent
     /// <summary>The <c>field</c> of the change, for example <c>account_alerts</c>.</summary>
     public string Field { get; init; } = string.Empty;
 
-    /// <summary>The <c>value</c> object, exactly as it arrived.</summary>
+    /// <summary>
+    /// The <c>value</c> object exactly as it arrived — or, for one unreadable item of an
+    /// array of independent events, that item alone.
+    /// </summary>
     public string Json { get; init; } = string.Empty;
 }
 

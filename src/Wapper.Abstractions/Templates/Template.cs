@@ -532,6 +532,17 @@ public sealed record Template
     public IReadOnlyList<string> UnknownComponents { get; init; } = [];
 
     /// <summary>
+    /// The components in <see cref="UnknownComponents"/>, each as the JSON object Meta sent,
+    /// in the same order.
+    /// </summary>
+    /// <remarks>
+    /// So a carousel or a limited-time offer this library cannot yet type is not reduced to
+    /// its name: an application that knows the shape can read it with a type of its own.
+    /// Read only; an update still refuses a template that carries any.
+    /// </remarks>
+    public IReadOnlyList<string> UnknownComponentsJson { get; init; } = [];
+
+    /// <summary>
     /// An authentication template: a one-time passcode and the button that hands it over.
     /// </summary>
     /// <param name="name">The template name.</param>

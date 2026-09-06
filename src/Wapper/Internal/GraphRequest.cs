@@ -39,6 +39,23 @@ internal sealed record GraphRequest
     public required string Path { get; init; }
 
     /// <summary>
+    /// The path with its query string cut off, for exception messages, log lines and spans.
+    /// </summary>
+    /// <remarks>
+    /// A query string is where a verification code travels, and a raw call can put anything
+    /// there. Everything that writes a request somewhere durable writes this; the endpoint
+    /// and the operation stay diagnosable without it.
+    /// </remarks>
+    public string DisplayPath
+    {
+        get
+        {
+            var query = Path.IndexOf('?');
+            return query < 0 ? Path : Path[..query];
+        }
+    }
+
+    /// <summary>
     /// Builds the request body, or <see langword="null"/> when there is none.
     /// </summary>
     /// <remarks>

@@ -29,6 +29,15 @@ internal sealed class ForwardOnlyStream(byte[] bytes) : Stream
 
     public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
 
+    // Completed synchronously on purpose. The base class would run Read on the thread pool,
+    // and a test winding a fake clock forward while that happens can outrun the timer the
+    // code under test has not yet registered.
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+        new(_inner.Read(buffer.Span));
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        Task.FromResult(_inner.Read(buffer, offset, count));
+
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
     public override void SetLength(long value) => throw new NotSupportedException();

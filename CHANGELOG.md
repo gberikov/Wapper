@@ -3,6 +3,95 @@
 Notable changes, newest first. Versions follow [Semantic Versioning](https://semver.org),
 and each released version is a bare tag on `master`.
 
+## Unreleased
+
+The findings of a review of the transport, the limiter and the webhook parser, fixed
+together. Nothing here changes what a call sends to Meta; it changes what happens around it
+when Meta is slow, says no, or sends something new.
+
+### Fixed
+
+- **A verification code no longer appears in exception messages, retry log lines or trace
+  spans.** `VerifyAsync` sends the code in the query string, and the transport was naming
+  the whole path — code included — in every failure it reported. Everything that writes a
+  request somewhere durable now writes the path without its query; the endpoint and the
+  operation are still there to read. The same applies to whatever a `Raw` call puts in a
+  query.
+- **A penalty recorded while a call is waiting its turn now holds that call back too.** A
+  call's wait was priced once and slept out with no second look, so a call queued for a
+  second before the Cloud API rejected somebody else's — and the budget was held for ten —
+  walked into the block the moment its second was up. Every reservation is now re-priced
+  when its wait runs out, in every budget it spends, so a penalty on the application budget
+  holds a call waiting on the pair allowance as well. Both limiters.
+- **Calls queued during a hold are released at the sustained rate after it, not together.**
+  The hold drains the bucket, so each of them owes its place in the queue on top of the hold;
+  eighty of them used to be given the same wait and let go at once when it lifted.
+- **A call that gives up waiting hands its permits back.** Cancelling the wait used to leave
+  the permits spent, so the next caller paid for a call that never went. Cancelled
+  reservations now return their permits in every budget, and in the in-memory limiter the
+  queue behind them moves up. A cancellation while the Redis script is already running is
+  awaited rather than abandoned, and the permits handed back afterwards.
+- **An idle budget is no longer forgotten before it has recovered.** The in-memory limiter
+  dropped any bucket untouched for ten minutes, so a two-hundred-an-hour account allowance
+  spent in full came back as a full two hundred eleven minutes later. A bucket now goes only
+  when forgetting it changes nothing: full, not held, and with nobody queued.
+- **HTTP/2 is actually requested.** The client was configured for it, but a request built
+  by hand does not inherit `DefaultRequestVersion` and went out as HTTP/1.1. Every request,
+  retry and download now carries the client's version and version policy.
+- **A timeout while the response body is being read is reported as a timeout**, not as the
+  caller's own cancellation, and is never retried: the headers arrived, so the call may have
+  taken effect. A body cut off by the connection, and a body that is not the documented
+  response, are each reported as a `WhatsAppException` with the cause inside it rather than
+  as a bare `IOException` or `JsonException`. For a media download the timeout covers the
+  round trip to the headers; reading the stream is bounded by the caller's own token.
+- **A resumable upload no longer copies the file twice.** A seekable stream — a file, a
+  `MemoryStream` — is sent from where it stands and rewound for a retry, never buffered. A
+  stream that cannot be rewound is read into memory once, up to a ceiling of 100 MB, and
+  refused before that rather than after the process has run out.
+- **A message of a type this library does not know keeps everything it carried.** It used
+  to become an `UnsupportedMessage` with the type name and nothing else. It is now an
+  `UnknownMessage`: the envelope read as for any message, the `interactive.type` when it was
+  an interactive reply of an unknown kind, and the message object itself as JSON.
+  `UnsupportedMessage` is now only the documented `unsupported` type — something WhatsApp
+  itself could not carry, with Meta's errors saying what — and a media message whose file
+  could not be fetched.
+- **One unreadable message or status no longer costs the ones beside it.** The items of
+  `messages` and `statuses` are bound one at a time; an item Meta has reshaped is reported
+  as an `UnknownEvent` carrying that item alone — with the phone number it arrived on — and
+  its neighbours are delivered as the events they are.
+
+### Added
+
+- **`IWhatsAppUnparsedWebhookHandler`**, the place a signed delivery the parser could not
+  read is handed to before it is acknowledged. Register one to keep the body somewhere
+  durable and replay it later; without one the endpoint logs the error — never the body —
+  and acknowledges, as before. A handler that throws fails the delivery so Meta repeats it.
+- **Typed events for five more webhook fields**, each checked against Meta's reference page
+  for the field: `AccountAlert` (`account_alerts`), `BusinessCapabilityChanged`
+  (`business_capability_update`), `PhoneNumberSecurityChanged` (`security`),
+  `TemplateCategoryChanged` (`template_category_update`) and `TemplateComponentsChanged`
+  (`message_template_components_update`). Every enum keeps its raw string beside it.
+- **`FlowReply.ReadResponse<T>(JsonTypeInfo<T>)`**, the answers of a submitted Flow as a
+  type of your own, read without reflection.
+- **Raw values on Flow statuses and health verdicts** — `FlowStatusChanged.RawStatus` and
+  `RawPreviousStatus`, `Flow.RawStatus`, `FlowHealth.RawCanSendMessage` — so a value this
+  library does not know is still readable, as it already was on the phone number events.
+- **[What is covered](docs/coverage.md)**: the endpoints and webhook fields this library
+  types, with their variants and tests, and what it does not.
+
+### Changed
+
+- **Redis Cluster** needs a hash tag in `KeyPrefix` (`{wapper}:rl:`), because every budget
+  of one call is spent by one script. Without one the first paced call now fails with a
+  `WhatsAppConfigurationException` naming the setting, instead of a warning about Redis
+  being away and a silent fall back to per-process pacing. See [docs/redis.md](docs/redis.md).
+- **The Redis budget hash carries two more fields**, the count of permits earned and the
+  rate. An older instance ignores them and a newer one treats their absence as a fresh
+  budget, so a rolling deployment mixes the two safely.
+- **After a rejection the client waits its own backoff plus `MaxWait`**, rather than the
+  larger of the two, because the hold drains the bucket and the call owes its place in the
+  queue on top of it.
+
 ## 0.4.0
 
 Two small things `0.3.0` computed inside and did not hand out, so a consumer kept its own copy

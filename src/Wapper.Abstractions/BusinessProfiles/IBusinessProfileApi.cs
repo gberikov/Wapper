@@ -62,8 +62,9 @@ public interface IBusinessProfileApi
     /// <see cref="WhatsAppCredentials.AppId"/> — which nothing else in this library does.
     /// </para>
     /// <para>
-    /// The picture is buffered in memory so that the upload can be retried, so this is not the
-    /// call to hand a very large file to. A profile picture has no business being one.
+    /// A seekable stream — a file, a <see cref="MemoryStream"/> — is sent as it is and rewound
+    /// for a retry. One that cannot be rewound is read into memory first, up to 100 MB, so
+    /// the upload can be retried; a profile picture has no business being anywhere near that.
     /// </para>
     /// </remarks>
     Task SetPictureAsync(

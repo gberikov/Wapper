@@ -89,9 +89,10 @@ public interface ITemplatesApi
     /// thing in this library that does is setting the business profile picture.
     /// </para>
     /// <para>
-    /// The file is buffered in memory so the upload can be retried, which is fine for a
-    /// sample and wrong for anything large. The sample is reviewed along with the template;
-    /// the media actually sent with each message is supplied at send time.
+    /// A seekable stream — a file, a <see cref="MemoryStream"/> — is sent as it is and rewound
+    /// for a retry. One that cannot be rewound is read into memory first, up to 100 MB, so
+    /// the upload can be retried. The sample is reviewed along with the template; the media
+    /// actually sent with each message is supplied at send time.
     /// </para>
     /// </remarks>
     Task<string> UploadHeaderSampleAsync(
