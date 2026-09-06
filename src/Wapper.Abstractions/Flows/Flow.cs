@@ -146,6 +146,9 @@ public sealed record FlowHealthEntity
     /// <summary>Whether it is in a state to send.</summary>
     public MessagingAvailability CanSendMessage { get; init; }
 
+    /// <summary>The raw verdict, in case Meta sent one this library does not know.</summary>
+    public string? RawCanSendMessage { get; init; }
+
     /// <summary>What is wrong, when it is blocked.</summary>
     public IReadOnlyList<FlowHealthError> Errors { get; init; } = [];
 
@@ -177,6 +180,9 @@ public sealed record FlowHealth
     /// <summary>The verdict over all of them.</summary>
     public MessagingAvailability CanSendMessage { get; init; }
 
+    /// <summary>The raw verdict, in case Meta sent one this library does not know.</summary>
+    public string? RawCanSendMessage { get; init; }
+
     /// <summary>Each thing involved, and its own verdict.</summary>
     public IReadOnlyList<FlowHealthEntity> Entities { get; init; } = [];
 }
@@ -205,6 +211,9 @@ public sealed record Flow
 
     /// <summary>Where it is in its life.</summary>
     public FlowStatus Status { get; init; }
+
+    /// <summary>The status exactly as Meta wrote it, for one not known here yet.</summary>
+    public string? RawStatus { get; init; }
 
     /// <summary>What it is for.</summary>
     public IReadOnlyList<FlowCategory> Categories { get; init; } = [];

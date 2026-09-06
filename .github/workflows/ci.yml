@@ -46,3 +46,26 @@ jobs:
           name: packages
           path: artifacts/*
           if-no-files-found: error
+
+  aot:
+    name: native aot smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v5
+
+      # Building the libraries with IsAotCompatible only says the analysers found nothing.
+      # Publishing an application ahead of time and running it is what proves the claim:
+      # the container, source-generated JSON, the webhook endpoint and the client, trimmed.
+      # Linux only: it is the runner with a native toolchain to hand; Windows and macOS
+      # binaries are not exercised here.
+      - name: Publish
+        run: >
+          dotnet publish samples/Wapper.AotSmoke/Wapper.AotSmoke.csproj
+          --configuration Release --runtime linux-x64 --output artifacts/aot
+
+      - name: Run
+        run: ./artifacts/aot/Wapper.AotSmoke

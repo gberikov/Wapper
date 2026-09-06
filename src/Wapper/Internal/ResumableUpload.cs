@@ -20,6 +20,18 @@ namespace Wapper.Internal;
 /// </remarks>
 internal static class ResumableUpload
 {
+    /// <summary>
+    /// The most a stream that cannot be rewound is buffered before the upload is refused.
+    /// </summary>
+    /// <remarks>
+    /// The session has to declare the length up front, and a retry has to send the bytes
+    /// again, so a forward-only stream is read into memory first. The ceiling is the largest
+    /// file the Cloud API accepts for any media at all — a document — rather than a guess at
+    /// what a sample or a profile picture may be, so it guards the process and nothing else;
+    /// Meta still has the final word on the size. A seekable stream is never buffered.
+    /// </remarks>
+    internal const long MaxBufferedBytes = 100 * 1024 * 1024;
+
     /// <summary>Puts a file through the resumable upload and returns the handle it becomes.</summary>
     /// <remarks>
     /// The file name is a label for the session. Meta records it and shows it nowhere, so it
@@ -37,13 +49,38 @@ internal static class ResumableUpload
     {
         var appId = GraphApiClient.RequireApp(credentials);
 
-        // The session has to declare the length up front, and a retry has to be able to send
-        // the bytes again. Both are answered by reading the file into memory once — these are
-        // pictures and template samples, not the hundred-megabyte documents the media
-        // endpoint streams.
-        using var buffer = new MemoryStream();
-        await content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        var bytes = buffer.ToArray();
+        if (content.CanSeek)
+        {
+            return await UploadSeekableAsync(
+                    client, tenant, credentials, appId, content, mimeType, fileName, operation, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // Read once into memory, and from then on treated like any seekable stream: the
+        // buffer is the one copy there is, and a retry rewinds it rather than copying it.
+        using var buffer = await BufferAsync(content, cancellationToken).ConfigureAwait(false);
+
+        return await UploadSeekableAsync(
+                client, tenant, credentials, appId, buffer, mimeType, fileName, operation, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<string> UploadSeekableAsync(
+        GraphApiClient client,
+        string tenant,
+        WhatsAppCredentials credentials,
+        string appId,
+        Stream content,
+        string mimeType,
+        string fileName,
+        string operation,
+        CancellationToken cancellationToken)
+    {
+        // What is left of the stream from where the caller positioned it, and where to wind
+        // it back to for a retry. The stream stays the caller's: it is neither closed nor
+        // copied, only read from here to its end as many times as the upload takes.
+        var origin = content.Position;
+        var length = content.Length - origin;
 
         var session = await client.SendAsync(
                 new GraphRequest
@@ -52,7 +89,7 @@ internal static class ResumableUpload
                     Credentials = credentials,
                     Method = HttpMethod.Post,
                     Path = $"{appId}/uploads?file_name={Uri.EscapeDataString(fileName)}" +
-                           $"&file_length={bytes.Length}" +
+                           $"&file_length={length}" +
                            $"&file_type={Uri.EscapeDataString(mimeType)}",
                     Operation = operation,
                 },
@@ -76,8 +113,14 @@ internal static class ResumableUpload
                     Operation = operation,
                     Content = () =>
                     {
-                        var body = new ByteArrayContent(bytes);
+                        // A retry starts over from where the caller left the stream. Without
+                        // the rewind the second attempt would send an empty file, and Meta
+                        // would accept it.
+                        content.Position = origin;
+
+                        var body = new StreamContent(new NonClosingStream(content));
                         body.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
+                        body.Headers.ContentLength = length;
                         return body;
                     },
                     Configure = request =>
@@ -98,5 +141,49 @@ internal static class ResumableUpload
         return uploaded.Handle ?? throw new WhatsAppException(
             "Meta accepted the file but returned no handle, so there is nothing to refer to " +
             "it by.");
+    }
+
+    /// <summary>
+    /// Reads a stream that cannot be rewound into memory, refusing before the ceiling rather
+    /// than after the process has run out of it.
+    /// </summary>
+    private static async Task<MemoryStream> BufferAsync(Stream content, CancellationToken cancellationToken)
+    {
+        var buffer = new MemoryStream();
+
+        try
+        {
+            var chunk = new byte[81920];
+
+            while (true)
+            {
+                var read = await content.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
+
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (buffer.Length + read > MaxBufferedBytes)
+                {
+                    throw new ArgumentException(
+                        $"The stream cannot be rewound, so it is read into memory before it is " +
+                        $"uploaded, and it is longer than the {MaxBufferedBytes} bytes this " +
+                        "client will buffer. Hand in a seekable stream — a file, or a " +
+                        "MemoryStream — to upload something this large.",
+                        nameof(content));
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+        }
+        catch
+        {
+            await buffer.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        buffer.Position = 0;
+        return buffer;
     }
 }

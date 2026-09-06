@@ -22,15 +22,38 @@ public class WebhookCoverageTests
                         "alert_type":"BUSINESS_VERIFICATION_STATUS"}}]}]}
             """;
 
+        // The flat shape from Meta's earlier examples, with an entity and an alert type the
+        // reference does not list. Typed all the same, with the raw values beside the
+        // enums, so nothing is lost and nothing is guessed.
+        var alert = Assert.IsType<AccountAlert>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
+
+        Assert.Equal("102290129340398", alert.BusinessAccountId);
+        Assert.Equal(AccountAlertSeverity.Critical, alert.Severity);
+        Assert.Equal(AccountAlertStatus.Active, alert.Status);
+        Assert.Equal(AccountAlertEntity.Unknown, alert.EntityType);
+        Assert.Equal("WABA", alert.RawEntityType);
+        Assert.Equal(AccountAlertKind.Unknown, alert.Kind);
+        Assert.Equal("BUSINESS_VERIFICATION_STATUS", alert.RawKind);
+    }
+
+    [Fact]
+    public void A_field_this_library_has_no_event_for_is_reported_with_its_body()
+    {
+        const string Body = """
+            {"object":"whatsapp_business_account","entry":[{"id":"102290129340398","changes":[
+              {"field":"account_review_update",
+               "value":{"decision":"APPROVED"}}]}]}
+            """;
+
         var unknown = Assert.IsType<UnknownEvent>(Assert.Single(WhatsAppWebhookParser.Parse(Body)));
 
-        Assert.Equal("account_alerts", unknown.Field);
+        Assert.Equal("account_review_update", unknown.Field);
         Assert.Equal("102290129340398", unknown.BusinessAccountId);
 
         // The body comes with it, so an application can act on a field this library has not
         // been taught yet without waiting for a release.
         var value = JsonDocument.Parse(unknown.Json).RootElement;
-        Assert.Equal("CRITICAL", value.GetProperty("alert_severity").GetString());
+        Assert.Equal("APPROVED", value.GetProperty("decision").GetString());
     }
 
     [Fact]

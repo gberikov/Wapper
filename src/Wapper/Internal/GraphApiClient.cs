@@ -128,7 +128,7 @@ internal sealed partial class GraphApiClient(
                         : exception;
                 }
 
-                Log.Retrying(_logger, request.Method, request.Path, exception.Code, attempt + 1, backoff.TotalSeconds);
+                Log.Retrying(_logger, request.Method, request.DisplayPath, exception.Code, attempt + 1, backoff.TotalSeconds);
                 WhatsAppDiagnostics.RecordRetry(activity, attempt + 1, exception.Code);
 
                 if (budget is { } spent)
@@ -149,8 +149,10 @@ internal sealed partial class GraphApiClient(
                     // retry into the failure: the caller would get a rate-limit exception
                     // about a wait this very call asked for, with the Cloud API's own error
                     // nowhere in it. Meta's 4^X reaches 64 seconds by the fourth retry, which
-                    // is longer than any sane MaxWait.
-                    maxWait = backoff > limits.MaxWait ? backoff : limits.MaxWait;
+                    // is longer than any sane MaxWait. The two add up rather than compete:
+                    // the hold drains the bucket, so the call owes its place in the queue
+                    // on top of the hold, and that place is other people's traffic.
+                    maxWait = backoff + limits.MaxWait;
                 }
                 else
                 {
@@ -180,7 +182,7 @@ internal sealed partial class GraphApiClient(
         if (response.Success is false)
         {
             throw new WhatsAppException(
-                $"The Cloud API answered {request.Method} {request.Path} with " +
+                $"The Cloud API answered {request.Method} {request.DisplayPath} with " +
                 "\"success\": false and no error object, so the call did not take effect " +
                 "and there is no code to say why.");
         }
@@ -209,9 +211,13 @@ internal sealed partial class GraphApiClient(
         GuardFetchUri(tenantOptions, absoluteUri);
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Get, absoluteUri);
+        ApplyVersion(httpRequest);
         httpRequest.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", request.Credentials.AccessToken);
 
+        // The timeout covers the round trip to the headers. Reading the stream that comes
+        // back is bounded by the caller's own token and nothing else: the response is handed
+        // out undisposed and read at whatever pace the caller reads it.
         using var timeout = new CancellationTokenSource(tenantOptions.Timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -321,8 +327,12 @@ internal sealed partial class GraphApiClient(
         // address against the root it was meant to sit under is the only way to catch it.
         if (!versioned.IsBaseOf(uri))
         {
+            // The path only, never its query: a raw call can put anything there.
+            var query = path.IndexOf('?');
+            var named = query < 0 ? path : path[..query];
+
             throw new WhatsAppException(
-                $"'{path}' does not stay under {versioned}, so it would address something " +
+                $"'{named}' does not stay under {versioned}, so it would address something " +
                 "other than the endpoint it names.");
         }
 
@@ -507,11 +517,13 @@ internal sealed partial class GraphApiClient(
         {
             Content = request.Content?.Invoke(),
         };
+        ApplyVersion(httpRequest);
         httpRequest.Headers.Authorization =
             new AuthenticationHeaderValue("Bearer", request.Credentials.AccessToken);
         request.Configure?.Invoke(httpRequest);
 
         // The shared HttpClient has no timeout of its own so that each tenant can set one.
+        // The one source covers the whole call, headers and body alike.
         using var timeout = new CancellationTokenSource(tenantOptions.Timeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -528,21 +540,46 @@ internal sealed partial class GraphApiClient(
         await ApplyUsageHeadersAsync(request, tenantOptions, response, linked.Token)
             .ConfigureAwait(false);
 
-        if (!response.IsSuccessStatusCode)
+        TResponse? result;
+
+        try
         {
-            throw new WhatsAppApiException(
-                await ParseErrorAsync(response, linked.Token).ConfigureAwait(false),
-                response.StatusCode,
-                RetryAfterOf(response));
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new WhatsAppApiException(
+                    await ParseErrorAsync(response, linked.Token).ConfigureAwait(false),
+                    response.StatusCode,
+                    RetryAfterOf(response));
+            }
+
+            result = await response.Content
+                .ReadFromJsonAsync(responseTypeInfo, linked.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw TimedOut(request, tenantOptions, "while its response was being read", exception);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException)
+        {
+            // The headers arrived and the body never finished. Not retried: the call may
+            // have taken effect, and nothing came back to say either way.
+            throw new WhatsAppException(
+                $"The response to {request.Method} {request.DisplayPath} could not be read: " +
+                $"{exception.Message}",
+                exception);
+        }
+        catch (JsonException exception)
+        {
+            throw new WhatsAppException(
+                $"The Cloud API answered {request.Method} {request.DisplayPath} with a body this " +
+                "client could not read as the documented response.",
+                exception);
         }
 
-        var result = await response.Content
-            .ReadFromJsonAsync(responseTypeInfo, linked.Token)
-            .ConfigureAwait(false);
-
         return result ?? throw new WhatsAppException(
-            $"The Cloud API returned an empty body for {request.Method} {request.Path}, which is " +
-            "never valid for this endpoint.");
+            $"The Cloud API returned an empty body for {request.Method} {request.DisplayPath}, " +
+            "which is never valid for this endpoint.");
     }
 
     /// <summary>
@@ -577,17 +614,46 @@ internal sealed partial class GraphApiClient(
         }
         catch (OperationCanceledException exception) when (!callerToken.IsCancellationRequested)
         {
-            throw new WhatsAppException(
-                $"{request.Method} {request.Path} did not complete within the configured timeout " +
-                $"of {tenantOptions.Timeout.TotalSeconds:0.##}s.",
-                exception);
+            throw TimedOut(request, tenantOptions, "before its response headers arrived", exception);
         }
         catch (HttpRequestException exception)
         {
             throw new WhatsAppException(
-                $"{request.Method} {request.Path} could not be sent: {exception.Message}",
+                $"{request.Method} {request.DisplayPath} could not be sent: {exception.Message}",
                 exception);
         }
+    }
+
+    /// <summary>
+    /// The per-tenant timeout, told apart from the caller's own cancellation.
+    /// </summary>
+    /// <remarks>
+    /// Never retried, whichever phase it fired in. A timeout while the body was being read
+    /// means the headers arrived and the call may well have taken effect; sending a message
+    /// again on that evidence could deliver it twice.
+    /// </remarks>
+    private static WhatsAppException TimedOut(
+        GraphRequest request,
+        WhatsAppOptions tenantOptions,
+        string phase,
+        Exception inner) =>
+        new(
+            $"{request.Method} {request.DisplayPath} did not complete within the configured " +
+            $"timeout of {tenantOptions.Timeout.TotalSeconds:0.##}s: it timed out {phase}.",
+            inner);
+
+    /// <summary>
+    /// Carries the client's negotiated HTTP version onto a request built by hand.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="HttpClient.SendAsync(HttpRequestMessage)"/> does not apply
+    /// <see cref="HttpClient.DefaultRequestVersion"/> — only the <c>GetAsync</c> family does —
+    /// so a request left alone goes out as HTTP/1.1 whatever the client was configured for.
+    /// </remarks>
+    private void ApplyVersion(HttpRequestMessage httpRequest)
+    {
+        httpRequest.Version = httpClient.DefaultRequestVersion;
+        httpRequest.VersionPolicy = httpClient.DefaultVersionPolicy;
     }
 
     /// <summary>

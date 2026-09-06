@@ -59,6 +59,18 @@ internal sealed class TemplateComponentDefinitionPayload
     [JsonPropertyName("type")]
     public string? Type { get; set; }
 
+    /// <summary>
+    /// Whatever a component carries that this class has no property for.
+    /// </summary>
+    /// <remarks>
+    /// A component of a type this library does not know — a carousel, a limited-time offer
+    /// — is kept whole through this, so a reading of the template can hand its body back
+    /// rather than only its name. Never set on the way out: a definition built here has no
+    /// extras, and the field stays absent from what is sent.
+    /// </remarks>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? Extra { get; set; }
+
     [JsonPropertyName("format")]
     public string? Format { get; set; }
 

@@ -180,6 +180,68 @@ public sealed class RedisRateLimiterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_penalty_from_another_instance_holds_back_a_call_already_waiting()
+    {
+        var first = CreateLimiter();
+        var second = CreateLimiter();
+
+        var scope = RateLimitScope.PhoneNumberThroughput("666");
+        var budget = new[] { new RateLimitRequest(scope, 1, 1) };
+
+        await first.WaitAsync(budget, Forever, TestContext.Current.CancellationToken);
+
+        // Queued for one second on the first instance. Before it is up, the second instance
+        // sees the Cloud API reject a call and holds the budget for three. The queued call
+        // has to look again before it goes, not trust the second it was first promised.
+        var queued = first.WaitAsync(budget, Forever, TestContext.Current.CancellationToken).AsTask();
+        await second.PenaliseAsync(scope, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var elapsed = await TimeAsync(() => new ValueTask(queued));
+
+        Assert.True(elapsed >= TimeSpan.FromSeconds(3), $"Released after {elapsed}.");
+    }
+
+    [Fact]
+    public async Task A_call_that_gives_up_waiting_hands_its_permit_back()
+    {
+        var limiter = CreateLimiter();
+        var budget = new[] { new RateLimitRequest(RateLimitScope.PhoneNumberThroughput("777"), 1, 1) };
+
+        await limiter.WaitAsync(budget, Forever, TestContext.Current.CancellationToken);
+
+        using var cancellation = new CancellationTokenSource();
+        var queued = limiter.WaitAsync(budget, Forever, cancellation.Token).AsTask();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+
+        // A second on, the budget has earned one permit, and the cancelled call sent nothing.
+        await Task.Delay(1100, TestContext.Current.CancellationToken);
+        await limiter.WaitAsync(budget, TimeSpan.Zero, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Calls_taken_under_a_penalty_are_spread_after_it_rather_than_released_together()
+    {
+        var limiter = CreateLimiter();
+        var scope = RateLimitScope.PhoneNumberThroughput("888");
+        var budget = new[] { new RateLimitRequest(scope, 2, 4) };
+
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        // Four calls queued during a one-second hold, at two a second: the hold drained the
+        // bucket, so they owe their places on top of it and are released over two seconds.
+        var started = Stopwatch.GetTimestamp();
+        var calls = Enumerable.Range(0, 4)
+            .Select(_ => limiter.WaitAsync(budget, Forever, TestContext.Current.CancellationToken).AsTask())
+            .ToArray();
+        await Task.WhenAll(calls);
+
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        Assert.True(elapsed >= TimeSpan.FromSeconds(2.5), $"All released after {elapsed}.");
+    }
+
+    [Fact]
     public async Task Losing_Redis_falls_back_to_pacing_this_instance_alone()
     {
         // Degrading to local pacing means Meta rejects the overshoot, which the retry path

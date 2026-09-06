@@ -16,6 +16,8 @@
     <!-- The Redis limiter falls back to the in-process one when Redis cannot be reached. -->
     <InternalsVisibleTo Include="Wapper.RateLimiting.Redis" />
     <InternalsVisibleTo Include="Wapper.RateLimiting.Redis.Tests" />
+    <!-- The benchmarks time the limiter and the upload buffering directly. -->
+    <InternalsVisibleTo Include="Wapper.Benchmarks" />
   </ItemGroup>
 
   <ItemGroup>

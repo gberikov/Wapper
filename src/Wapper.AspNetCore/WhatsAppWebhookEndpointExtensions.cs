@@ -177,14 +177,76 @@ public static class WhatsAppWebhookEndpointExtensions
         }
         catch (WhatsAppException exception)
         {
-            logger.LogError(exception, "A signed webhook delivery could not be parsed.");
-
-            // Signed, so it did come from Meta; something in it is simply new or malformed.
-            // Answering with an error would have Meta redeliver it for up to seven days.
-            return Results.Ok();
+            return await KeepUnparsedAsync(context, body.WrittenMemory, secret.Tenant, exception, logger)
+                .ConfigureAwait(false);
         }
 
         return await DispatchAsync(context, events, logger).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Hands a signed delivery the parser refused to whatever the application registered to
+    /// keep it, and answers Meta accordingly.
+    /// </summary>
+    /// <remarks>
+    /// Signed, so it did come from Meta; something in it is simply new or malformed. Answering
+    /// with an error would have Meta redeliver it for up to seven days and this endpoint
+    /// refuse it every time, so it is acknowledged — once the application has had the chance
+    /// to keep the body. A keeper that throws fails the delivery, because a store that is
+    /// down is exactly what Meta's retry is for. Without a keeper the body goes nowhere, and
+    /// the log says so without the body: it carries messages and personal data.
+    /// </remarks>
+    private static async Task<IResult> KeepUnparsedAsync(
+        HttpContext context,
+        ReadOnlyMemory<byte> body,
+        string tenant,
+        WhatsAppException error,
+        ILogger logger)
+    {
+        var keeper = context.RequestServices.GetService<IWhatsAppUnparsedWebhookHandler>();
+
+        if (keeper is null)
+        {
+            logger.LogError(
+                error,
+                "A signed webhook delivery for tenant '{Tenant}' could not be parsed and no " +
+                "IWhatsAppUnparsedWebhookHandler is registered to keep it, so it is acknowledged " +
+                "and lost.",
+                tenant);
+
+            return Results.Ok();
+        }
+
+        try
+        {
+            await keeper
+                .HandleAsync(
+                    new WhatsAppUnparsedWebhook { Body = body, Tenant = tenant, Error = error },
+                    context.RequestAborted)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "A signed webhook delivery for tenant '{Tenant}' could not be parsed, and the " +
+                "handler keeping it threw. The delivery is failed so Meta repeats it.",
+                tenant);
+
+            return Results.StatusCode(StatusCodes.Status500InternalServerError);
+        }
+
+        logger.LogWarning(
+            error,
+            "A signed webhook delivery for tenant '{Tenant}' could not be parsed and was handed " +
+            "to the IWhatsAppUnparsedWebhookHandler to keep.",
+            tenant);
+
+        return Results.Ok();
     }
 
     /// <summary>

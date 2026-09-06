@@ -10,6 +10,10 @@
     <Project Path="tests/Wapper.Tests/Wapper.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Wapper.AotSmoke/Wapper.AotSmoke.csproj" />
     <Project Path="samples/Wapper.Sample/Wapper.Sample.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Wapper.Benchmarks/Wapper.Benchmarks.csproj" />
   </Folder>
 </Solution>
