@@ -32,6 +32,105 @@ public sealed class RedisRateLimiterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Cancelling_inside_the_queue_does_not_give_a_newcomer_an_existing_target()
+    {
+        var limiter = CreateLimiter();
+        var scope = RateLimitScope.PhoneNumberThroughput("cancel-interior");
+        var budgets = new[] { new RateLimitRequest(scope, 1, 1) };
+        await limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken);
+        using var cancellation = new CancellationTokenSource();
+        var first = limiter.WaitAsync(budgets, Forever, cancellation.Token).AsTask();
+        await WaitForBalanceAsync(scope, -0.5);
+
+        var second = limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask();
+        await WaitForBalanceAsync(scope, -1.5);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+
+        var third = limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask();
+        await second;
+        Assert.False(third.IsCompleted);
+        var remaining = Stopwatch.StartNew();
+        await third;
+        Assert.True(remaining.Elapsed >= TimeSpan.FromMilliseconds(700));
+    }
+
+    [Fact]
+    public async Task A_new_penalty_cannot_extend_a_wait_past_its_original_budget()
+    {
+        var limiter = CreateLimiter();
+        var scope = RateLimitScope.PhoneNumberThroughput("deadline");
+        var budgets = new[]
+        {
+            RateLimitRequest.Unpaced(RateLimitScope.ApplicationRequests("deadline-app")),
+            new RateLimitRequest(scope, 1, 1),
+        };
+        await limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken);
+        var queued = limiter.WaitAsync(budgets, TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken).AsTask();
+        await WaitForBalanceAsync(scope, -0.5);
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var error = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(() => queued);
+        Assert.Equal(scope, error.Scope);
+        var balance = (double)await _connection.GetDatabase().HashGetAsync(RedisRateLimiter.KeyFor("wapper:rl:", scope), "t");
+        Assert.True(balance >= 0, $"The refused reservation left a balance of {balance}.");
+    }
+
+    [Fact]
+    public async Task A_short_key_lifetime_does_not_expire_a_waiting_reservation()
+    {
+        var limiter = CreateLimiter(new RedisRateLimiterOptions { KeyLifetime = TimeSpan.FromMilliseconds(50) });
+        var scope = RateLimitScope.PhoneNumberThroughput("short-lifetime");
+        var budgets = new[] { new RateLimitRequest(scope, 2, 1) };
+        await limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.CancelAfter(TimeSpan.FromSeconds(15));
+
+        var elapsed = await TimeAsync(() => limiter.WaitAsync(budgets, TimeSpan.FromSeconds(10), cancellation.Token));
+        Assert.True(elapsed >= TimeSpan.FromMilliseconds(400));
+    }
+
+    private async Task WaitForBalanceAsync(RateLimitScope scope, double maximum)
+    {
+        var key = RedisRateLimiter.KeyFor("wapper:rl:", scope);
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            var balance = await _connection.GetDatabase().HashGetAsync(key, "t");
+            if (!balance.IsNull && (double)balance <= maximum)
+            {
+                return;
+            }
+
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Fail("The reservation was not recorded in Redis.");
+    }
+
+    [Fact]
+    public async Task Every_budget_retains_state_for_a_call_waiting_on_another_budget()
+    {
+        var limiter = CreateLimiter(new RedisRateLimiterOptions { KeyLifetime = TimeSpan.FromMilliseconds(50) });
+        var application = RateLimitScope.ApplicationRequests("retention-app");
+        var throughput = RateLimitScope.PhoneNumberThroughput("retention-number");
+        var budgets = new[]
+        {
+            RateLimitRequest.Unpaced(application),
+            new RateLimitRequest(throughput, 1, 1),
+        };
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+        using var cancellation = new CancellationTokenSource();
+        var queued = limiter.WaitAsync(budgets, TimeSpan.FromMinutes(2), cancellation.Token).AsTask();
+        await WaitForBalanceAsync(throughput, -0.5);
+        await limiter.PenaliseAsync(application, TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        var lifetime = await _connection.GetDatabase().KeyTimeToLiveAsync(RedisRateLimiter.KeyFor("wapper:rl:", application));
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        Assert.True(lifetime > TimeSpan.FromMinutes(2), $"The other budget would expire after {lifetime}.");
+    }
+
+    [Fact]
     public void A_pair_key_does_not_spell_out_the_customer_s_number()
     {
         // Redis persists to disk, and nothing ever reads the key back: the limiter only needs
@@ -180,6 +279,68 @@ public sealed class RedisRateLimiterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_penalty_from_another_instance_holds_back_a_call_already_waiting()
+    {
+        var first = CreateLimiter();
+        var second = CreateLimiter();
+
+        var scope = RateLimitScope.PhoneNumberThroughput("666");
+        var budget = new[] { new RateLimitRequest(scope, 1, 1) };
+
+        await first.WaitAsync(budget, Forever, TestContext.Current.CancellationToken);
+
+        // Queued for one second on the first instance. Before it is up, the second instance
+        // sees the Cloud API reject a call and holds the budget for three. The queued call
+        // has to look again before it goes, not trust the second it was first promised.
+        var queued = first.WaitAsync(budget, Forever, TestContext.Current.CancellationToken).AsTask();
+        await second.PenaliseAsync(scope, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var elapsed = await TimeAsync(() => new ValueTask(queued));
+
+        Assert.True(elapsed >= TimeSpan.FromSeconds(3), $"Released after {elapsed}.");
+    }
+
+    [Fact]
+    public async Task A_call_that_gives_up_waiting_hands_its_permit_back()
+    {
+        var limiter = CreateLimiter();
+        var budget = new[] { new RateLimitRequest(RateLimitScope.PhoneNumberThroughput("777"), 1, 1) };
+
+        await limiter.WaitAsync(budget, Forever, TestContext.Current.CancellationToken);
+
+        using var cancellation = new CancellationTokenSource();
+        var queued = limiter.WaitAsync(budget, Forever, cancellation.Token).AsTask();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+
+        // A second on, the budget has earned one permit, and the cancelled call sent nothing.
+        await Task.Delay(1100, TestContext.Current.CancellationToken);
+        await limiter.WaitAsync(budget, TimeSpan.Zero, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Calls_taken_under_a_penalty_are_spread_after_it_rather_than_released_together()
+    {
+        var limiter = CreateLimiter();
+        var scope = RateLimitScope.PhoneNumberThroughput("888");
+        var budget = new[] { new RateLimitRequest(scope, 2, 4) };
+
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        // Four calls queued during a one-second hold, at two a second: the hold drained the
+        // bucket, so they owe their places on top of it and are released over two seconds.
+        var started = Stopwatch.GetTimestamp();
+        var calls = Enumerable.Range(0, 4)
+            .Select(_ => limiter.WaitAsync(budget, Forever, TestContext.Current.CancellationToken).AsTask())
+            .ToArray();
+        await Task.WhenAll(calls);
+
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        Assert.True(elapsed >= TimeSpan.FromSeconds(2.5), $"All released after {elapsed}.");
+    }
+
+    [Fact]
     public async Task Losing_Redis_falls_back_to_pacing_this_instance_alone()
     {
         // Degrading to local pacing means Meta rejects the overshoot, which the retry path
@@ -244,10 +405,10 @@ public sealed class RedisRateLimiterTests : IAsyncLifetime
         return Stopwatch.GetElapsedTime(started);
     }
 
-    private RedisRateLimiter CreateLimiter() => new(
+    private RedisRateLimiter CreateLimiter(RedisRateLimiterOptions? options = null) => new(
         _connection,
         new InMemoryRateLimiter(TimeProvider.System),
-        Options.Create(new RedisRateLimiterOptions()),
+        Options.Create(options ?? new RedisRateLimiterOptions()),
         TimeProvider.System,
         NullLogger<RedisRateLimiter>.Instance);
 }

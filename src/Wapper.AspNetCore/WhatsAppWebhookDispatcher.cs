@@ -56,6 +56,9 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
             case UnsupportedMessage message:
                 await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
                 break;
+            case UnknownMessage message:
+                await InvokeAsync(services, message, cancellationToken).ConfigureAwait(false);
+                break;
             case MessageStatusChanged status:
                 await InvokeAsync(services, status, cancellationToken).ConfigureAwait(false);
                 break;
@@ -85,6 +88,21 @@ internal sealed class WhatsAppWebhookDispatcher(ILogger<WhatsAppWebhookDispatche
                 break;
             case MarketingPreferenceChanged preference:
                 await InvokeAsync(services, preference, cancellationToken).ConfigureAwait(false);
+                break;
+            case AccountAlert alert:
+                await InvokeAsync(services, alert, cancellationToken).ConfigureAwait(false);
+                break;
+            case BusinessCapabilityChanged capability:
+                await InvokeAsync(services, capability, cancellationToken).ConfigureAwait(false);
+                break;
+            case PhoneNumberSecurityChanged security:
+                await InvokeAsync(services, security, cancellationToken).ConfigureAwait(false);
+                break;
+            case TemplateCategoryChanged category:
+                await InvokeAsync(services, category, cancellationToken).ConfigureAwait(false);
+                break;
+            case TemplateComponentsChanged components:
+                await InvokeAsync(services, components, cancellationToken).ConfigureAwait(false);
                 break;
             case UnknownEvent unknown:
                 await InvokeAsync(services, unknown, cancellationToken).ConfigureAwait(false);

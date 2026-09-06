@@ -11,8 +11,8 @@ public sealed class WhatsAppRateLimitedException : WhatsAppException
     /// <summary>Raised by the client, before the call went anywhere.</summary>
     public WhatsAppRateLimitedException(RateLimitScope scope, TimeSpan retryAfter, TimeSpan maxWait)
         : base($"Sending would exceed the {scope.Budget} rate limit for '{scope.RedactedKey}'. The " +
-               $"call would have to wait {retryAfter.TotalSeconds:0.##}s, which is longer than the " +
-               $"configured maximum of {maxWait.TotalSeconds:0.##}s.")
+               $"call cannot proceed within the configured maximum wait of {maxWait.TotalSeconds:0.##}s. " +
+               $"Its current remaining wait estimate is {retryAfter.TotalSeconds:0.##}s.")
     {
         Scope = scope;
         RetryAfter = retryAfter;

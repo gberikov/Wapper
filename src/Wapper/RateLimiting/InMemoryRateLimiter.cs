@@ -34,6 +34,15 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
 
     private long _lastSweepTimestamp = time.GetTimestamp();
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// A permit is reserved in every budget first, so a budget that refuses leaves nothing
+    /// spent in the others. The reservations are then waited out together and re-priced on
+    /// every wake-up: a penalty recorded while this call slept pushes it back rather than
+    /// letting it through into a block the Cloud API has just announced. Only once every
+    /// reservation is due are they claimed — and a caller that gives up before then hands
+    /// every one of them back.
+    /// </remarks>
     public async ValueTask WaitAsync(
         IReadOnlyList<RateLimitRequest> requests,
         TimeSpan maxWait,
@@ -43,35 +52,60 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
 
         Sweep();
 
-        var wait = TimeSpan.Zero;
-        List<TokenBucket>? taken = null;
+        var started = time.GetTimestamp();
+        var reservations = new TokenBucket.Reservation?[requests.Count];
 
-        for (var i = 0; i < requests.Count; i++)
+        try
         {
-            var request = requests[i];
-            var bucket = GetBucket(request);
-
-            if (!bucket.TryTake(maxWait, out var bucketWait))
+            for (var i = 0; i < requests.Count; i++)
             {
-                // Hand back what the earlier budgets already gave, or this call would spend
-                // permits it never used and quietly throttle the next one. The rejected
-                // bucket took nothing, and still reported the wait it would have needed.
-                ReturnAll(taken);
-
-                throw new WhatsAppRateLimitedException(request.Scope, bucketWait, maxWait);
+                reservations[i] = Reserve(requests[i], maxWait);
             }
 
-            (taken ??= new List<TokenBucket>(requests.Count)).Add(bucket);
-
-            if (bucketWait > wait)
+            while (true)
             {
-                wait = bucketWait;
+                var wait = TimeSpan.Zero;
+
+                for (var i = 0; i < reservations.Length; i++)
+                {
+                    var reservation = reservations[i];
+                    var remaining = reservation!.Bucket.WaitFor(reservation);
+
+                    if (remaining > TimeSpan.Zero && remaining > maxWait - time.GetElapsedTime(started))
+                    {
+                        throw new WhatsAppRateLimitedException(requests[i].Scope, remaining, maxWait);
+                    }
+
+                    if (remaining > wait)
+                    {
+                        wait = remaining;
+                    }
+                }
+
+                if (wait == TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                await Task.Delay(wait, time, cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var reservation in reservations)
+            {
+                reservation!.Bucket.Claim(reservation);
             }
         }
-
-        if (wait > TimeSpan.Zero)
+        catch
         {
-            await Task.Delay(wait, time, cancellationToken).ConfigureAwait(false);
+            // Nothing was sent, so nothing was spent. Every reservation taken so far goes
+            // back — the ones a refusing budget left behind in the budgets before it, or
+            // all of them when the caller gave up — and whoever queued behind moves up.
+            foreach (var reservation in reservations)
+            {
+                reservation?.Bucket.Cancel(reservation);
+            }
+
+            throw;
         }
     }
 
@@ -85,58 +119,89 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
             return ValueTask.CompletedTask;
         }
 
-        if (_buckets.TryGetValue(scope, out var bucket))
+        // A bucket the sweep has just retired refuses the hold, and it is kept for the
+        // bucket that replaces it rather than lost with the old one.
+        if (_buckets.TryGetValue(scope, out var bucket) && bucket.Penalise(duration))
         {
-            bucket.Penalise(duration);
             return ValueTask.CompletedTask;
         }
 
         var until = time.GetTimestamp() + (long)(duration.TotalSeconds * time.TimestampFrequency);
-        _pendingHolds.AddOrUpdate(scope, until, (_, existing) => existing > until ? existing : until);
+        KeepHold(scope, until);
 
         // A bucket built between the lookup and here would never see the hold, because it is
         // only drained on the way in.
-        if (_buckets.TryGetValue(scope, out var raced) && _pendingHolds.TryRemove(scope, out _))
+        if (_buckets.TryGetValue(scope, out var raced)
+            && _pendingHolds.TryRemove(scope, out _)
+            && !raced.Penalise(duration))
         {
-            raced.Penalise(duration);
+            KeepHold(scope, until);
         }
 
         return ValueTask.CompletedTask;
     }
 
-    private TokenBucket GetBucket(RateLimitRequest request)
+    private void KeepHold(RateLimitScope scope, long until) =>
+        _pendingHolds.AddOrUpdate(scope, until, (_, existing) => existing > until ? existing : until);
+
+    /// <summary>
+    /// Reserves a permit in one budget, refusing the whole call when the wait is too long.
+    /// </summary>
+    private TokenBucket.Reservation Reserve(RateLimitRequest request, TimeSpan maxWait)
     {
-        // The allowance is captured when the bucket is created. A tenant that changes its
-        // configured throughput at runtime keeps the old pacing until the bucket goes idle,
-        // which is a fair trade for not rebuilding state on every call.
-        var bucket = _buckets.GetOrAdd(
-            request.Scope,
-            static (_, state) => new TokenBucket(state.Burst, state.PermitsPerSecond, state.Time),
-            (request.Burst, request.PermitsPerSecond, Time: time));
-
-        if (_pendingHolds.TryRemove(request.Scope, out var until))
+        while (true)
         {
-            var remaining = time.GetElapsedTime(time.GetTimestamp(), until);
+            var bucket = GetBucket(request);
 
-            if (remaining > TimeSpan.Zero)
+            switch (bucket.TryReserve(maxWait, out var reservation, out var wait))
             {
-                bucket.Penalise(remaining);
+                case ReserveOutcome.Reserved:
+                    return reservation!;
+
+                case ReserveOutcome.Refused:
+                    // The refusing bucket took nothing, and still reported the wait it would
+                    // have needed. The caller hands back what the earlier budgets gave.
+                    throw new WhatsAppRateLimitedException(request.Scope, wait, maxWait);
+
+                case ReserveOutcome.Retired:
+                default:
+                    // The sweep dropped it between the lookup and the reservation. The entry
+                    // is removed by instance, so a bucket somebody else has already replaced
+                    // it with is left alone.
+                    _buckets.TryRemove(KeyValuePair.Create(request.Scope, bucket));
+                    break;
             }
         }
-
-        return bucket;
     }
 
-    private static void ReturnAll(List<TokenBucket>? buckets)
+    private TokenBucket GetBucket(RateLimitRequest request)
     {
-        if (buckets is null)
+        while (true)
         {
-            return;
-        }
+            // The allowance is captured when the bucket is created. A tenant that changes
+            // its configured throughput at runtime keeps the old pacing until the bucket
+            // goes idle, which is a fair trade for not rebuilding state on every call.
+            var bucket = _buckets.GetOrAdd(
+                request.Scope,
+                static (_, state) => new TokenBucket(state.Burst, state.PermitsPerSecond, state.Time),
+                (request.Burst, request.PermitsPerSecond, Time: time));
 
-        foreach (var bucket in buckets)
-        {
-            bucket.Return();
+            if (!_pendingHolds.TryRemove(request.Scope, out var until))
+            {
+                return bucket;
+            }
+
+            var remaining = time.GetElapsedTime(time.GetTimestamp(), until);
+
+            if (remaining <= TimeSpan.Zero || bucket.Penalise(remaining))
+            {
+                return bucket;
+            }
+
+            // Retired by the sweep in the meantime. The hold goes back where it was found,
+            // and the bucket that replaces this one collects it.
+            KeepHold(request.Scope, until);
+            _buckets.TryRemove(KeyValuePair.Create(request.Scope, bucket));
         }
     }
 
@@ -144,6 +209,12 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
     /// Drops buckets nobody has used for a while. Without this, one bucket per recipient
     /// would accumulate for the lifetime of the process.
     /// </summary>
+    /// <remarks>
+    /// Only a bucket whose absence is indistinguishable from its presence goes: full, unheld
+    /// and with nobody queued. The bucket decides that under its own lock and retires itself
+    /// in the same breath, so a reservation racing the sweep either lands first and keeps
+    /// it, or finds it retired and starts over on a fresh one.
+    /// </remarks>
     private void Sweep()
     {
         var now = time.GetTimestamp();
@@ -162,11 +233,9 @@ internal sealed class InMemoryRateLimiter(TimeProvider time) : IWhatsAppRateLimi
 
         foreach (var (scope, bucket) in _buckets)
         {
-            // A bucket still serving a penalty has to survive: a business account held back
-            // for an hour would otherwise be forgotten and immediately overrun again.
-            if (bucket.IsIdleFor(IdleLifetime) && !bucket.IsHeld)
+            if (bucket.TryRetire(IdleLifetime))
             {
-                _buckets.TryRemove(scope, out _);
+                _buckets.TryRemove(KeyValuePair.Create(scope, bucket));
             }
         }
 

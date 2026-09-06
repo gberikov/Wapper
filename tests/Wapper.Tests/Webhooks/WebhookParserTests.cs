@@ -379,17 +379,89 @@ public class WebhookParserTests
     }
 
     [Fact]
-    public void An_unknown_message_type_is_surfaced_rather_than_dropped()
+    public void An_unknown_message_type_is_surfaced_with_everything_it_carried()
     {
         var events = WhatsAppWebhookParser.Parse(Delivery("""
             "messages": [{
               "from": "79000000001", "id": "wamid.A", "timestamp": "1755000000",
               "type": "hologram",
-              "hologram": {"whatever": true}
+              "hologram": {"important": "payload"}
             }]
             """));
 
-        Assert.Equal("hologram", Assert.IsType<UnsupportedMessage>(Assert.Single(events)).Type);
+        var message = Assert.IsType<UnknownMessage>(Assert.Single(events));
+
+        // Not the documented `unsupported`: Meta delivered this one whole, and only this
+        // library has no type for it. The envelope is read as for any message, and the
+        // message object itself survives for the application to read.
+        Assert.Equal("hologram", message.Type);
+        Assert.Null(message.InteractiveType);
+        Assert.Equal("wamid.A", message.Id);
+        Assert.Equal("79000000001", message.From);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1755000000), message.Timestamp);
+
+        using var json = System.Text.Json.JsonDocument.Parse(message.Json);
+        Assert.Equal("payload", json.RootElement.GetProperty("hologram").GetProperty("important").GetString());
+    }
+
+    [Fact]
+    public void An_unknown_interactive_reply_keeps_its_subtype_and_body()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery("""
+            "messages": [{
+              "from": "79000000001", "id": "wamid.A", "timestamp": "1755000000",
+              "type": "interactive",
+              "interactive": {"type": "carousel_reply", "carousel_reply": {"card": 2}}
+            }]
+            """));
+
+        var message = Assert.IsType<UnknownMessage>(Assert.Single(events));
+
+        Assert.Equal("interactive", message.Type);
+        Assert.Equal("carousel_reply", message.InteractiveType);
+        Assert.Contains("\"card\"", message.Json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void One_unreadable_message_does_not_cost_the_messages_beside_it()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery("""
+            "messages": [
+              {"from": "79000000001", "id": "good-1", "type": "text", "text": {"body": "hello"}},
+              {"from": "79000000001", "id": "bad", "type": "text", "text": {"body": 42}},
+              {"from": "79000000001", "id": "good-2", "type": "text", "text": {"body": "again"}}
+            ]
+            """));
+
+        Assert.Equal(3, events.Count);
+
+        // In order, with the good ones typed and the bad one reported on its own — carrying
+        // its own body rather than the whole delivery, and the number it arrived on.
+        Assert.Equal("hello", Assert.IsType<TextMessage>(events[0]).Text);
+        var unreadable = Assert.IsType<UnknownEvent>(events[1]);
+        Assert.Equal("messages", unreadable.Field);
+        Assert.Equal("106540352242922", unreadable.PhoneNumberId);
+        Assert.Contains("\"bad\"", unreadable.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain("good-1", unreadable.Json, StringComparison.Ordinal);
+        Assert.Equal("again", Assert.IsType<TextMessage>(events[2]).Text);
+    }
+
+    [Fact]
+    public void One_unreadable_status_does_not_cost_the_statuses_beside_it()
+    {
+        var events = WhatsAppWebhookParser.Parse(Delivery("""
+            "statuses": [
+              {"id": "wamid.A", "status": "delivered", "timestamp": "1755000000", "recipient_id": "79000000001"},
+              {"id": "wamid.B", "status": "read", "timestamp": "1755000000", "recipient_id": "79000000001",
+               "conversation": "not-an-object"},
+              {"id": "wamid.C", "status": "sent", "timestamp": "1755000000", "recipient_id": "79000000001"}
+            ]
+            """));
+
+        Assert.Equal(3, events.Count);
+        Assert.Equal(MessageDeliveryStatus.Delivered, Assert.IsType<MessageStatusChanged>(events[0]).Status);
+        Assert.Contains("wamid.B", Assert.IsType<UnknownEvent>(events[1]).Json, StringComparison.Ordinal);
+        Assert.Equal(MessageDeliveryStatus.Sent, Assert.IsType<MessageStatusChanged>(events[2]).Status);
     }
 
     [Fact]

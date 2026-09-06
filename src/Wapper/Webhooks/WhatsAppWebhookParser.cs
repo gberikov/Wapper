@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Wapper.Flows;
 using Wapper.Internal;
 using Wapper.Messages;
@@ -193,11 +194,12 @@ public static class WhatsAppWebhookParser
     /// <returns>The SHA-256 of the body, as lower-case hex.</returns>
     /// <remarks>
     /// <para>
-    /// Meta repeats deliveries of its own accord, and repeats any delivery a handler failed
-    /// for up to seven days, so handlers have to be idempotent. The cheapest way to make one
-    /// so is to write this key down under a unique constraint and drop the insert that
-    /// collides: two genuinely different deliveries cannot produce the same digest, because
-    /// the body carries the message id and the timestamp.
+    /// A key for the delivery as a whole — an audit log of what Meta sent, say. It is not a
+    /// key for the events inside it: one delivery carries several, Meta may send the same
+    /// event again in a different delivery, and dropping a repeated delivery is not the
+    /// same as having handled it. For deduplicating what a handler does, key on the event
+    /// — a message's id, or a status's message id together with the status — and keep
+    /// whether it was processed as a fact of its own. The webhooks guide shows the shape.
     /// </para>
     /// <para>
     /// Taken over the bytes as they arrived, so it has to be computed before anything
@@ -291,6 +293,26 @@ public static class WhatsAppWebhookParser
                 events.Add(ToAccountUpdate(account, value, businessAccountId, entryTime));
                 break;
 
+            case "account_alerts" when Bind(value) is { } alert:
+                events.Add(ToAccountAlert(alert, businessAccountId, entryTime));
+                break;
+
+            case "business_capability_update" when Bind(value) is { } capability:
+                events.Add(ToCapabilityChange(capability, businessAccountId, entryTime));
+                break;
+
+            case "security" when Bind(value) is { } security:
+                events.Add(ToSecurityChange(security, businessAccountId, entryTime));
+                break;
+
+            case "template_category_update" when Bind(value) is { } category:
+                events.Add(ToCategoryChange(category, businessAccountId, entryTime));
+                break;
+
+            case "message_template_components_update" when Bind(value) is { } components:
+                events.Add(ToComponentsChange(components, businessAccountId, entryTime));
+                break;
+
             // One field carries both the status changes and the monitoring alerts, told apart
             // by `event`.
             case "flows" when Bind(value) is { } flow:
@@ -335,9 +357,13 @@ public static class WhatsAppWebhookParser
         string? field,
         JsonElement value,
         string businessAccountId,
-        DateTimeOffset entryTime) => new()
+        DateTimeOffset entryTime,
+        string? phoneNumberId = null,
+        string? display = null) => new()
     {
+        PhoneNumberId = phoneNumberId ?? string.Empty,
         BusinessAccountId = businessAccountId,
+        DisplayPhoneNumber = display,
         Timestamp = entryTime,
         Field = field ?? string.Empty,
         Json = value.ValueKind == JsonValueKind.Undefined ? string.Empty : value.GetRawText(),
@@ -350,7 +376,19 @@ public static class WhatsAppWebhookParser
     /// Left as raw JSON until here so that a delivery on a field nobody handles costs one
     /// string rather than a walk over every property the messages webhook can carry.
     /// </remarks>
-    private static WebhookValue? Bind(JsonElement value)
+    private static WebhookValue? Bind(JsonElement value) =>
+        Bind(value, WhatsAppJsonContext.Default.WebhookValue);
+
+    /// <summary>
+    /// Binds one object of the delivery, or nothing when it is not shaped as expected.
+    /// </summary>
+    /// <remarks>
+    /// A field this library knows, shaped in a way it does not. Failing the whole delivery
+    /// over it would cost the changes around it; the caller falls through to an event that
+    /// keeps the body, so nothing is lost without trace.
+    /// </remarks>
+    private static T? Bind<T>(JsonElement value, JsonTypeInfo<T> typeInfo)
+        where T : class
     {
         if (value.ValueKind != JsonValueKind.Object)
         {
@@ -359,13 +397,10 @@ public static class WhatsAppWebhookParser
 
         try
         {
-            return value.Deserialize(WhatsAppJsonContext.Default.WebhookValue);
+            return value.Deserialize(typeInfo);
         }
         catch (JsonException)
         {
-            // A field this library knows, shaped in a way it does not. Failing the whole
-            // delivery over it would cost the changes around it; the caller falls through to
-            // UnknownEvent, which keeps the body so nothing is lost without trace.
             return null;
         }
     }
@@ -448,21 +483,26 @@ public static class WhatsAppWebhookParser
 
         var display = value.Metadata?.DisplayPhoneNumber;
 
-        // A message with no id or no sender, or a status with no id or no recipient, is
-        // reported rather than skipped. The body of the whole change comes along, since one
-        // item of it has no raw form of its own by this point.
-        foreach (var message in value.Messages ?? [])
+        // Each item is bound on its own, so one Meta has reshaped costs that item alone. An
+        // item that cannot be read at all, or reads as a message with no id or no sender, or
+        // a status with no id or no recipient, is reported with its own body rather than
+        // skipped — and with the number it arrived on, so it can still be routed.
+        foreach (var item in value.Messages ?? [])
         {
+            var message = Bind(item, WhatsAppJsonContext.Default.WebhookMessage);
+
             events.Add(
-                ToEvent(message, value, phoneNumberId, display, businessAccountId, entryTime)
-                ?? Unreadable("messages", raw, businessAccountId, entryTime));
+                (message is null ? null : ToEvent(message, item, value, phoneNumberId, display, businessAccountId, entryTime))
+                ?? Unreadable("messages", item, businessAccountId, entryTime, phoneNumberId, display));
         }
 
-        foreach (var status in value.Statuses ?? [])
+        foreach (var item in value.Statuses ?? [])
         {
+            var status = Bind(item, WhatsAppJsonContext.Default.WebhookStatus);
+
             events.Add(
-                ToEvent(status, phoneNumberId, display, businessAccountId, entryTime)
-                ?? Unreadable("messages", raw, businessAccountId, entryTime));
+                (status is null ? null : ToEvent(status, phoneNumberId, display, businessAccountId, entryTime))
+                ?? Unreadable("messages", item, businessAccountId, entryTime, phoneNumberId, display));
         }
 
         foreach (var error in value.Errors ?? [])
@@ -602,8 +642,169 @@ public static class WhatsAppWebhookParser
         // `max_daily_conversations_per_business` replaced `current_limit`, which Meta retired
         // in February 2026. Older deliveries and some intermediaries still send the old one.
         CurrentLimit = PhoneNumberMapping.ParseTier(
-            value.MaxDailyConversationsPerBusiness ?? value.CurrentLimit),
-        RawCurrentLimit = value.MaxDailyConversationsPerBusiness ?? value.CurrentLimit,
+            TierText(value.MaxDailyConversationsPerBusiness) ?? value.CurrentLimit),
+        RawCurrentLimit = TierText(value.MaxDailyConversationsPerBusiness) ?? value.CurrentLimit,
+    };
+
+    /// <summary>
+    /// A messaging limit as its tier name, whether Meta sent the name or — on webhook
+    /// versions before v24.0 — the number of conversations it stands for.
+    /// </summary>
+    private static string? TierText(JsonElement limit) => limit.ValueKind switch
+    {
+        JsonValueKind.String => limit.GetString(),
+        JsonValueKind.Number when limit.TryGetInt64(out var conversations) => TierName(conversations),
+        _ => null,
+    };
+
+    /// <summary>The tier a daily conversation count stands for, or the count itself as text.</summary>
+    private static string TierName(long conversations) => conversations switch
+    {
+        50 => "TIER_50",
+        250 => "TIER_250",
+        1000 => "TIER_1K",
+        2000 => "TIER_2K",
+        10000 => "TIER_10K",
+        100000 => "TIER_100K",
+        -1 => "TIER_UNLIMITED",
+        _ => conversations.ToString(CultureInfo.InvariantCulture),
+    };
+
+    private static AccountAlert ToAccountAlert(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime)
+    {
+        // Nested under `alert_info` in the reference, flat on the value in earlier examples.
+        var severity = value.AlertInfo?.AlertSeverity ?? value.AlertSeverity;
+        var status = value.AlertInfo?.AlertStatus ?? value.AlertStatus;
+        var kind = value.AlertInfo?.AlertType ?? value.AlertType;
+
+        return new AccountAlert
+        {
+            BusinessAccountId = businessAccountId,
+            Timestamp = entryTime,
+            EntityType = value.EntityType?.ToUpperInvariant() switch
+            {
+                "BUSINESS" => AccountAlertEntity.Business,
+                "PHONE_NUMBER" => AccountAlertEntity.PhoneNumber,
+                "CURRENT_STATUS_ID" => AccountAlertEntity.BusinessProfile,
+                _ => AccountAlertEntity.Unknown,
+            },
+            RawEntityType = value.EntityType,
+            EntityId = value.EntityId,
+            Severity = severity?.ToUpperInvariant() switch
+            {
+                "INFORMATIONAL" => AccountAlertSeverity.Informational,
+                "WARNING" => AccountAlertSeverity.Warning,
+                "CRITICAL" => AccountAlertSeverity.Critical,
+                _ => AccountAlertSeverity.Unknown,
+            },
+            RawSeverity = severity,
+            Status = status?.ToUpperInvariant() switch
+            {
+                "ACTIVE" => AccountAlertStatus.Active,
+                "NONE" => AccountAlertStatus.None,
+                _ => AccountAlertStatus.Unknown,
+            },
+            RawStatus = status,
+            Kind = kind?.ToUpperInvariant() switch
+            {
+                "INCREASED_CAPABILITIES_ELIGIBILITY_DEFERRED" => AccountAlertKind.IncreasedCapabilitiesEligibilityDeferred,
+                "INCREASED_CAPABILITIES_ELIGIBILITY_FAILED" => AccountAlertKind.IncreasedCapabilitiesEligibilityFailed,
+                "INCREASED_CAPABILITIES_ELIGIBILITY_NEED_MORE_INFO" => AccountAlertKind.IncreasedCapabilitiesEligibilityNeedMoreInfo,
+                "OBA_APPROVED" => AccountAlertKind.OfficialBusinessAccountApproved,
+                "OBA_REJECTED" => AccountAlertKind.OfficialBusinessAccountRejected,
+                "PROFILE_PICTURE_LOST" => AccountAlertKind.ProfilePictureLost,
+                _ => AccountAlertKind.Unknown,
+            },
+            RawKind = kind,
+            Description = value.AlertInfo?.AlertDescription ?? value.AlertDescription,
+        };
+    }
+
+    private static BusinessCapabilityChanged ToCapabilityChange(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime)
+    {
+        // The tier when Meta sent it; the retired per-phone number otherwise, which stood for
+        // the same limit under its old name.
+        var tier = TierText(value.MaxDailyConversationsPerBusiness)
+            ?? (value.MaxDailyConversationPerPhone is { } perPhone ? TierName(perPhone) : null);
+
+        return new BusinessCapabilityChanged
+        {
+            BusinessAccountId = businessAccountId,
+            Timestamp = entryTime,
+            MessagingLimit = PhoneNumberMapping.ParseTier(tier),
+            RawMessagingLimit = tier,
+            MaxDailyConversationsPerPhone = value.MaxDailyConversationPerPhone,
+            MaxPhoneNumbersPerBusiness = value.MaxPhoneNumbersPerBusiness,
+            MaxPhoneNumbersPerAccount = value.MaxPhoneNumbersPerWaba,
+        };
+    }
+
+    private static PhoneNumberSecurityChanged ToSecurityChange(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
+        DisplayPhoneNumber = value.DisplayPhoneNumber,
+        Event = value.Event?.ToUpperInvariant() switch
+        {
+            "PIN_CHANGED" => PhoneNumberSecurityEvent.PinChanged,
+            "PIN_RESET_REQUEST" => PhoneNumberSecurityEvent.PinResetRequest,
+            "PIN_REQUEST_SUCCESS" => PhoneNumberSecurityEvent.PinResetSucceeded,
+            _ => PhoneNumberSecurityEvent.Unknown,
+        },
+        RawEvent = value.Event,
+        RequesterId = value.Requester,
+    };
+
+    private static TemplateCategoryChanged ToCategoryChange(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
+        TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+        TemplateName = value.MessageTemplateName ?? string.Empty,
+        TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
+        Category = TemplateMapping.ParseCategory(value.NewCategory),
+        RawCategory = value.NewCategory,
+        PreviousCategory = value.PreviousCategory is null ? null : TemplateMapping.ParseCategory(value.PreviousCategory),
+        RawPreviousCategory = value.PreviousCategory,
+        CorrectCategory = value.CorrectCategory is null ? null : TemplateMapping.ParseCategory(value.CorrectCategory),
+        RawCorrectCategory = value.CorrectCategory,
+        ChangesAt = value.CategoryUpdateTimestamp is { } seconds
+            ? DateTimeOffset.FromUnixTimeSeconds(seconds)
+            : null,
+    };
+
+    private static TemplateComponentsChanged ToComponentsChange(
+        WebhookValue value,
+        string businessAccountId,
+        DateTimeOffset entryTime) => new()
+    {
+        BusinessAccountId = businessAccountId,
+        Timestamp = entryTime,
+        TemplateId = value.MessageTemplateId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+        TemplateName = value.MessageTemplateName ?? string.Empty,
+        TemplateLanguage = value.MessageTemplateLanguage ?? string.Empty,
+        Header = value.MessageTemplateTitle,
+        Body = value.MessageTemplateElement,
+        Footer = value.MessageTemplateFooter,
+        Buttons = [.. (value.MessageTemplateButtons ?? []).Select(button => new TemplateComponentButton
+        {
+            Type = button.Type,
+            Text = button.Text,
+            Url = button.Url,
+            PhoneNumber = button.PhoneNumber,
+        })],
     };
 
     private static PhoneNumberNameChanged ToPhoneNumberNameChange(
@@ -632,7 +833,9 @@ public static class WhatsAppWebhookParser
         // Absent when the Flow has just been created, which is the one case where there is no
         // previous state to report.
         PreviousStatus = FlowMapping.ParseStatus(value.OldStatus),
+        RawPreviousStatus = value.OldStatus,
         Status = FlowMapping.ParseStatus(value.NewStatus),
+        RawStatus = value.NewStatus,
         Message = value.Message,
     };
 
@@ -718,6 +921,7 @@ public static class WhatsAppWebhookParser
 
     private static WhatsAppEvent? ToEvent(
         WebhookMessage message,
+        JsonElement raw,
         WebhookValue value,
         string phoneNumberId,
         string? display,
@@ -771,7 +975,7 @@ public static class WhatsAppWebhookParser
                 MessageId = reactedTo,
                 Emoji = message.Reaction.Emoji,
             },
-            "interactive" => Interactive(common, message.Interactive, message.Type),
+            "interactive" => Interactive(common, message.Interactive, raw),
             // A template quick-reply arrives as its own message type carrying the payload the
             // template attached, not as an interactive reply carrying a button id.
             "button" when message.Button?.Payload is { } payload => New<TemplateButtonReply>(common) with
@@ -798,7 +1002,12 @@ public static class WhatsAppWebhookParser
                 Kind = message.System?.Type,
                 NewWhatsAppId = message.System?.WaId,
             },
-            _ => Unsupported(common, message.Type, message.Errors),
+            // The documented type for something WhatsApp could not carry, with Meta's own
+            // errors saying what. Everything else — a type Meta added last week, or a known
+            // type without the field that makes it what it is — is a message delivered
+            // whole that this library cannot read, and it keeps its body.
+            "unsupported" => Unsupported(common, message.Type, message.Errors),
+            _ => Unknown(common, message.Type, interactiveType: null, raw),
         };
     }
 
@@ -827,7 +1036,7 @@ public static class WhatsAppWebhookParser
     private static WhatsAppEvent Interactive(
         MessageFields common,
         WebhookInteractive? interactive,
-        string? type)
+        JsonElement raw)
     {
         // A submitted Flow arrives here rather than as a message type of its own, and carries
         // the whole form rather than one tapped control.
@@ -845,7 +1054,10 @@ public static class WhatsAppWebhookParser
 
         if (reply?.Id is not { } id)
         {
-            return Unsupported(common, type, errors: null);
+            // A reply of a kind this library does not know — Meta adds them — or one of a
+            // known kind without its id. Either way the subtype is worth naming, and the
+            // body is worth keeping.
+            return Unknown(common, "interactive", interactive?.Type, raw);
         }
 
         return New<InteractiveReply>(common) with
@@ -916,6 +1128,18 @@ public static class WhatsAppWebhookParser
             Errors = errors is { Count: > 0 } reported
                 ? [.. reported.Select(e => e.ToError())]
                 : [],
+        };
+
+    private static UnknownMessage Unknown(
+        MessageFields common,
+        string? type,
+        string? interactiveType,
+        JsonElement raw) =>
+        New<UnknownMessage>(common) with
+        {
+            Type = type ?? string.Empty,
+            InteractiveType = interactiveType,
+            Json = raw.GetRawText(),
         };
 
     private static TMessage New<TMessage>(MessageFields common)

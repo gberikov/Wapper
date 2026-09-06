@@ -26,18 +26,107 @@ a handler that throws does not stop the events behind it from being offered — 
 is still failed, because swallowing it would lose the message for good. **Handlers have to be
 idempotent**, which they have to be anyway: Meta repeats deliveries of its own accord.
 
-Meta has more than twenty webhook fields and keeps adding to them. The ones this library has
-typed events for arrive as those; anything else arrives as `UnknownEvent` carrying the raw
-`value` object, so a capability change or a security alert leaves a trace rather than
-vanishing:
+## What arrives when Meta sends something new
+
+Meta adds message types, interactive reply types and webhook fields without warning. Nothing
+this library cannot type is dropped; it lands in one of three places, each carrying what it
+came with:
+
+| What was new | Arrives as | Carries |
+|---|---|---|
+| A message `type` this library has no event for, or an `interactive.type` it does not know | `UnknownMessage` | The envelope like any message — `Id`, `From`, `Timestamp`, reply context — plus `Type`, `InteractiveType` and the message object in `Json`. |
+| A `messages` or `statuses` item Meta has reshaped so it cannot be read | `UnknownEvent` with `Field = "messages"` | That item alone in `Json`, with `PhoneNumberId`. The items beside it are delivered as the events they are. |
+| A webhook field with no typed event, or a known field shaped so it cannot be read at all | `UnknownEvent` | The whole `value` object in `Json`, under `Field`. |
+
+`UnsupportedMessage` is something else: the documented `unsupported` type, meaning WhatsApp
+itself could not carry what the customer sent, with Meta's own errors saying what. A media
+message whose file Meta could not fetch arrives there too, under its own type.
+
+To notice new shapes without logging customers' messages, handle the two fallbacks and log
+only their metadata:
 
 ```csharp
-builder.Services.AddWhatsAppWebhookHandler<Unhandled, UnknownEvent>();
+builder.Services.AddWhatsAppWebhookHandler<NewShapes, UnknownMessage>();
+builder.Services.AddWhatsAppWebhookHandler<NewFields, UnknownEvent>();
 ```
 
-The same event is where a field this library *does* know lands when it arrives shaped in a
-way the library could not read — including one that bound cleanly and yielded no event at all.
-A handler for it is the one place to learn that anything is being discarded.
+```csharp
+public sealed class NewShapes(ILogger<NewShapes> log) : IWhatsAppEventHandler<UnknownMessage>
+{
+    public Task HandleAsync(UnknownMessage message, CancellationToken ct)
+    {
+        // The type and the subtype are Meta's vocabulary, safe to log. The body is the
+        // customer's, so it goes to a store with a retention policy, not to a log line.
+        log.LogWarning("Unknown message type {Type}/{Subtype} on {Number}",
+            message.Type, message.InteractiveType, message.PhoneNumberId);
+        return Task.CompletedTask;
+    }
+}
+```
+
+A delivery that fails signature verification never reaches any of this; one that verifies
+but cannot be parsed at all — no `entry`, not JSON — goes to
+[`IWhatsAppUnparsedWebhookHandler`](#deliveries-the-parser-refuses).
+
+### Reading a Flow's answers
+
+A submitted Flow arrives as `FlowReply`, and its answers in `ResponseJson` are shaped by the
+Flow's own screens — the library cannot know them, but you do. Declare the shape and read it
+without reflection, so it works trimmed and under Native AOT:
+
+```csharp
+public sealed record BookingAnswers(
+    [property: JsonPropertyName("flow_token")] string FlowToken,
+    [property: JsonPropertyName("date")] string Date,
+    [property: JsonPropertyName("guests")] int Guests);
+
+[JsonSerializable(typeof(BookingAnswers))]
+internal sealed partial class BookingJsonContext : JsonSerializerContext;
+```
+
+```csharp
+public sealed class Bookings(IBookingService bookings) : IWhatsAppEventHandler<FlowReply>
+{
+    public async Task HandleAsync(FlowReply reply, CancellationToken ct)
+    {
+        var answers = reply.ReadResponse(BookingJsonContext.Default.BookingAnswers);
+        if (answers is null) return;
+
+        // The flow_token is what you sent the Flow with, and how the answers find the
+        // customer and the thing they were doing.
+        await bookings.ConfirmAsync(answers.FlowToken, answers.Date, answers.Guests, ct);
+    }
+}
+```
+
+## Deliveries the parser refuses
+
+A delivery whose signature verifies but which the parser cannot read at all is acknowledged:
+it did come from Meta, and answering with an error would have it redelivered for seven days
+and refused every time. Acknowledging is also how it is lost for good — unless something
+keeps the body first. Register that something:
+
+```csharp
+builder.Services.AddSingleton<IWhatsAppUnparsedWebhookHandler, UnparsedInbox>();
+```
+
+```csharp
+public sealed class UnparsedInbox(IDeadLetters deadLetters) : IWhatsAppUnparsedWebhookHandler
+{
+    public Task HandleAsync(WhatsAppUnparsedWebhook delivery, CancellationToken ct) =>
+        // Copy the body: the buffer belongs to the request. Store the error alongside, so a
+        // later version of the parser can be pointed at the ones it now understands.
+        deadLetters.WriteAsync(delivery.Tenant, delivery.Body.ToArray(), delivery.Error.Message, ct);
+}
+```
+
+Once the handler returns, the delivery is acknowledged. If it throws — the store is down —
+the delivery is failed so Meta sends it again, which is the one retry there is. Do not throw
+to retry the parse: it fails the same way every time. Without a handler the endpoint logs the
+error, never the body, and acknowledges.
+
+Give the store a retention policy. The bodies are customers' messages, and seven days is what
+Meta itself keeps them for.
 
 ## Delivery statuses
 
@@ -153,21 +242,99 @@ rather than one Meta issues, so sharing it costs nothing.
 
 ## Deliveries you have already seen
 
-Meta repeats deliveries of its own accord, and repeats every delivery a handler failed for up
-to seven days. Handlers have to be idempotent; the cheapest way to make them so is to
-recognise a repeat and drop it, and the body is already a perfectly good key:
+Meta repeats deliveries of its own accord, repeats every delivery a handler failed for up to
+seven days, and sends the repeats to every app subscribed to the account. Handlers therefore
+run more than once for the same event, and the question is what "once" should mean for
+yours.
+
+**Dropping a repeat is not the same as having handled it.** A table of delivery keys with a
+unique index, where a collision means "seen, answer `200`", loses events: the key is written,
+the handler throws, Meta retries, the retry collides and is dropped. A key only says the
+delivery was *received*; whether its effects happened is a second fact, and it has to be kept
+separately.
+
+The shape that holds up is an inbox:
+
+1. Verify the signature. Nothing below runs for a delivery that fails it.
+2. Insert a row per **event** — not per delivery — with the event's key and a status of
+   `received`, inside one transaction with whatever the event itself changes if that change
+   is in the same database. A collision on the key means this event is already in the inbox:
+   leave the row alone.
+3. Answer `200`. The delivery is now yours; Meta's retry is no longer what keeps it.
+4. Process the rows in `received`, marking each `done` when its effects have happened, and
+   retry the ones that fail on your own schedule.
+
+Step 2 is what a handler does; step 4 is a worker. A handler that does both — writes the row
+and does the work — has to be sure that the work is idempotent, because the worker will see
+the row again if the handler dies between the two.
+
+The key is per event because a delivery is a batch, and one delivery can carry a message and
+three statuses. For a message the key is its `Id`. For a status it is the message id **and**
+the status: `sent`, `delivered` and `read` for one message arrive as three events, and a key
+of the message id alone would keep the first and drop the other two.
 
 ```csharp
-var key = WhatsAppWebhookParser.DeliveryKey(body);
+public sealed class Inbox(AppDbContext db) : IWhatsAppEventHandler<WhatsAppEvent>
+{
+    public async Task HandleAsync(WhatsAppEvent evt, CancellationToken ct)
+    {
+        var key = evt switch
+        {
+            IncomingMessage m => $"message:{m.Id}",
+            MessageStatusChanged s => $"status:{s.MessageId}:{s.RawStatus}",
+            _ => null, // account-level events: key on what they name, or let them repeat
+        };
+        if (key is null) return;
+
+        db.Inbox.Add(new InboxRow { Key = key, ReceivedAt = DateTimeOffset.UtcNow, Status = "received" });
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException e) when (e.IsUniqueViolation())
+        {
+            // Already in the inbox, whether or not it has been processed yet. Nothing to do.
+        }
+    }
+}
 ```
 
-The SHA-256 of the raw body, as 64 hex characters — which is a column with a unique index on
-it. Insert; if it collides, this delivery has been handled, so answer `200` and stop. Two
-genuinely different deliveries cannot collide, because the body carries the message id and the
-timestamp.
+Two deliveries carrying the same event can arrive at the same moment — Meta sends retries to
+every subscribed app, and a load balancer sends them to different replicas. The unique index
+is what serialises them: one insert wins, the other collides. Do not check-then-insert.
 
-Take it over the bytes exactly as they arrived, before anything re-serializes them: a
-reindented body is a different key.
+Whatever the worker does for an event has to be safe to do twice — a state change conditioned
+on the current state, an outbox row for the email rather than the email itself — because a
+worker can die after doing it and before marking the row `done`. This is at-least-once with
+idempotent effects; nothing here makes it exactly-once, and nothing can.
+
+`WhatsAppWebhookParser.DeliveryKey(body)` is still there: the SHA-256 of the raw body, for
+the case where the delivery as a whole is the unit — an audit log of what Meta sent, say.
+It is per delivery, not per event, and taken over the bytes as they arrived: a reindented
+body is a different key, and two deliveries carrying the same message are two keys.
+
+### What stays where, and for how long
+
+- **The request body** lives in the endpoint's buffer for the duration of the request; copy
+  it to keep it.
+- **A media id** on a `MediaMessage` is good for seven days. Download promptly, and download
+  under your own token with a timeout: the library's timeout covers the round trip to the
+  headers, and reading the stream is yours.
+- **Redis, when the shared limiter is registered,** can go away. By default sends then pace
+  per instance and Meta rejects the overshoot; set `FallBackToLocal = false` to fail sends
+  instead. See [Running in more than one instance](redis.md).
+
+### Three secrets, none of them in the repository
+
+| Setting | Issued by | Used for |
+|---|---|---|
+| `AppSecret` | Meta, on the app dashboard | Verifying `X-Hub-Signature-256` on every delivery. Shared by every number on the app. |
+| `WebhookVerifyToken` | You; any string | The one-time subscription handshake on `GET`. |
+| `AccessToken` | Meta, a system user token | Every call the client makes. Needs `whatsapp_business_messaging` for messages and `whatsapp_business_management` for everything else. |
+
+Put them in user secrets or environment variables, never in `appsettings.json` — see
+[Where the tokens go](configuration.md#where-the-tokens-go).
 
 ## Without ASP.NET Core
 
@@ -217,7 +384,12 @@ way.
 | `flows` | If you use Flows | Status changes and the monitoring alerts that precede them. → `FlowStatusChanged`, `FlowAlert` |
 | `phone_number_name_update` | If display names change | An approved change is the cue to register the number again — without that the new name never takes effect. → `PhoneNumberNameChanged` |
 | `account_update` | Recommended | Policy violations, restrictions, offboarding, deletion. The only place any of that is reported; everything else surfaces as sends failing for reasons that read like a bug. → `AccountUpdated` |
-| `account_alerts`, `business_capability_update`, `message_template_components_update`, `template_category_update`, `security` | Optional | Useful to log; nothing here has to act on them. All arrive as `UnknownEvent`. |
+| `template_category_update` | If you manage templates | A category change changes the price of every message sent with the template, and the advance notice arrives 24 hours before it. → `TemplateCategoryChanged` |
+| `message_template_components_update` | If you manage templates | A template edited in WhatsApp Manager by somebody else is otherwise invisible until a send fails validation. → `TemplateComponentsChanged` |
+| `security` | Recommended | A two-step verification PIN reset nobody on your side asked for. → `PhoneNumberSecurityChanged` |
+| `account_alerts` | Optional | Messaging limit increases denied or deferred, Official Business Account decisions, a lost profile picture. → `AccountAlert` |
+| `business_capability_update` | Optional | The messaging limit and phone number limits as numbers. → `BusinessCapabilityChanged` |
+| `account_review_update`, `calls`, `automatic_events` | Optional | No typed event yet; all arrive as `UnknownEvent`. |
 | `partner_solutions`, `history`, `smb_app_state_sync`, `smb_message_echoes`, `automatic_events`, `payment_configuration_update` | Solution Partners only | Only meaningful to an approved partner onboarding customers, or with a regional payments product. |
 
 The token also has to carry the right permissions, or a field can be subscribed and still stay
