@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Published as a Native AOT binary by CI and run. Building the libraries with
+       IsAotCompatible only proves the analysers found nothing; running a trimmed, ahead-of-time
+       compiled application through DI, source-generated JSON, the webhook endpoint and the
+       client is what proves the claim. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Every trimming warning is a place the published binary may differ from the JIT
+         run. None is acceptable. -->
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Wapper.AspNetCore/Wapper.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>

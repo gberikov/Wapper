@@ -22,7 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: read
+      # Write so the run can create the GitHub release for the tag it was triggered by.
+      contents: write
       # Required so nuget.org can verify who is publishing.
       id-token: write
     steps:
@@ -54,3 +55,25 @@ jobs:
           --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
+
+      # After the push, never before: a release page announcing a version that failed to
+      # publish would be worse than none. The notes are the CHANGELOG's own section for the
+      # version, so there is one source and not two, with GitHub's list of merged pull
+      # requests and the compare link appended below them. An empty section — a tag with no
+      # entry — leaves the generated part alone to carry it.
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v version="## $TAG" \
+            '$0 == version { found = 1; next } /^## / { found = 0 } found' \
+            CHANGELOG.md > notes.md
+
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+
+          # Skipping an existing one keeps a re-run harmless, the way --skip-duplicate does
+          # for the packages.
+          gh release view "$TAG" > /dev/null 2>&1 ||
+            gh release create "$TAG" --title "$TAG" $prerelease --notes-file notes.md --generate-notes

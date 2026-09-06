@@ -699,14 +699,19 @@ public class TemplatesApiTests
     {
         const string Page = """
             {"data":[{"name":"n","language":"en","category":"MARKETING","status":"APPROVED","id":"1",
-              "components":[{"type":"BODY","text":"b"},{"type":"CAROUSEL"}]}]}
+              "components":[{"type":"BODY","text":"b"},
+                            {"type":"CAROUSEL","cards":[{"components":[{"type":"HEADER","format":"IMAGE"}]}]}]}]}
             """;
         var (templates, _) = Create(Page);
 
         var template = await Single(templates);
 
-        // The carousel cannot be modelled, but it can be seen.
+        // The carousel cannot be modelled, but it can be seen — by name, and whole, for an
+        // application that knows what a card deck looks like.
         Assert.Equal("CAROUSEL", Assert.Single(template.UnknownComponents));
+        var carousel = JsonDocument.Parse(Assert.Single(template.UnknownComponentsJson)).RootElement;
+        Assert.Equal("CAROUSEL", carousel.GetProperty("type").GetString());
+        Assert.Equal(1, carousel.GetProperty("cards").GetArrayLength());
 
         // Components are replaced wholesale on an edit, so writing this template back would
         // erase the carousel at Meta. A typo fix in the body must not cost the card deck.

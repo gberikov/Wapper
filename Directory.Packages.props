@@ -32,4 +32,9 @@
     <PackageVersion Include="xunit.v3" Version="4.0.0" />
   </ItemGroup>
 
+  <!-- Benchmarks only. Run by hand; never shipped. -->
+  <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
 </Project>

@@ -95,6 +95,7 @@ internal static class TemplateMapping
         int? codeExpiration = null;
         IReadOnlyList<TemplateButton> buttons = [];
         List<string>? unknown = null;
+        List<string>? unknownJson = null;
 
         foreach (var component in payload.Components ?? [])
         {
@@ -125,8 +126,12 @@ internal static class TemplateMapping
                 default:
                     // Meta adds component types without warning. Failing the whole read over
                     // one would take the listing with it, so the component is recorded by its
-                    // type instead — which is also what stops an edit erasing it unseen.
+                    // type — which is also what stops an edit erasing it unseen — and kept
+                    // whole as JSON, for an application that knows what to do with it.
                     (unknown ??= []).Add(component.Type ?? "(untyped)");
+                    (unknownJson ??= []).Add(System.Text.Json.JsonSerializer.Serialize(
+                        component,
+                        WhatsAppJsonContext.Default.TemplateComponentDefinitionPayload));
                     break;
             }
         }
@@ -157,6 +162,7 @@ internal static class TemplateMapping
             RejectedReason = payload.RejectedReason,
             PreviousCategory = ParseCategory(payload.PreviousCategory),
             UnknownComponents = unknown ?? [],
+            UnknownComponentsJson = unknownJson ?? [],
         };
     }
 

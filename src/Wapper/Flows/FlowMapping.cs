@@ -11,6 +11,7 @@ internal static class FlowMapping
         Id = payload.Id ?? string.Empty,
         Name = payload.Name,
         Status = ParseStatus(payload.Status),
+        RawStatus = payload.Status,
         Categories = [.. (payload.Categories ?? []).Select(ParseCategory)],
         RawCategories = payload.Categories ?? [],
         ValidationErrors = ToValidationErrors(payload.ValidationErrors),
@@ -22,11 +23,13 @@ internal static class FlowMapping
             ? new FlowHealth
             {
                 CanSendMessage = ParseAvailability(health.CanSendMessage),
+                RawCanSendMessage = health.CanSendMessage,
                 Entities = [.. (health.Entities ?? []).Select(entity => new FlowHealthEntity
                 {
                     EntityType = entity.EntityType,
                     Id = entity.Id,
                     CanSendMessage = ParseAvailability(entity.CanSendMessage),
+                    RawCanSendMessage = entity.CanSendMessage,
                     Errors = [.. (entity.Errors ?? []).Select(error => new FlowHealthError
                     {
                         Code = error.ErrorCode,

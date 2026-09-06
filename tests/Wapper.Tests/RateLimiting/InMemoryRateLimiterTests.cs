@@ -9,6 +9,45 @@ public class InMemoryRateLimiterTests
     private static readonly TimeSpan Forever = TimeSpan.FromDays(1);
 
     [Fact]
+    public async Task A_new_penalty_cannot_extend_a_wait_past_its_original_budget()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.PhoneNumberThroughput("deadline");
+        var budgets = new[] { new RateLimitRequest(scope, 1, 1) };
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+
+        var queued = limiter.WaitAsync(budgets, TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken).AsTask();
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        var error = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(() => queued);
+        Assert.Equal(scope, error.Scope);
+
+        // Refusal also returns the reservation: after the hold, one earned permit suffices.
+        time.Advance(TimeSpan.FromSeconds(10));
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Rechecking_uses_the_remaining_wait_budget_not_a_fresh_one()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.PhoneNumberThroughput("elapsed-deadline");
+        var budgets = new[] { new RateLimitRequest(scope, 1, 1) };
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+        var queued = limiter.WaitAsync(budgets, TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken).AsTask();
+        time.Advance(TimeSpan.FromMilliseconds(500));
+        await limiter.PenaliseAsync(scope, TimeSpan.FromMilliseconds(1500), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMilliseconds(500));
+
+        // 1.5 seconds still owed, but only one second left in the original two seconds.
+        var error = await Assert.ThrowsAsync<WhatsAppRateLimitedException>(() => queued);
+        Assert.Equal(TimeSpan.FromMilliseconds(1500), error.RetryAfter);
+    }
+
+    [Fact]
     public async Task A_call_within_every_budget_does_not_wait()
     {
         var time = new FakeTimeProvider();
@@ -206,6 +245,139 @@ public class InMemoryRateLimiterTests
             limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask());
 
         Assert.True(time.GetUtcNow() - afterwards < TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task A_penalty_recorded_while_a_call_waits_holds_that_call_back_too()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var scope = RateLimitScope.PhoneNumberThroughput("111");
+        var budgets = new[] { new RateLimitRequest(scope, 1, 1) };
+
+        await limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken);
+
+        // Queued for one second. Before that second is up the Cloud API rejects somebody
+        // else's call, and the budget is held for ten. The queued call must not walk into
+        // the block just because its wait was priced before the block was known.
+        var queued = limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask();
+        await limiter.PenaliseAsync(scope, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var started = time.GetUtcNow();
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Task.Yield();
+        Assert.False(queued.IsCompleted);
+
+        await Clock.RunAsync(time, queued);
+
+        Assert.True(time.GetUtcNow() - started >= TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task A_penalty_on_the_application_budget_holds_a_call_waiting_on_another_budget()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var application = RateLimitScope.ApplicationRequests(WhatsAppTenant.Default);
+        var budgets = new[]
+        {
+            RateLimitRequest.Unpaced(application),
+            new RateLimitRequest(RateLimitScope.RecipientPair("111", "79000000001"), 1d / 6d, 1),
+        };
+
+        await limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken);
+
+        // Waiting six seconds on the pair allowance. Meanwhile the whole application is
+        // blocked for a minute; every budget of a call is looked at again before it goes.
+        var queued = limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken).AsTask();
+        await limiter.PenaliseAsync(application, TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+
+        var started = time.GetUtcNow();
+        await Clock.RunAsync(time, queued);
+
+        Assert.True(time.GetUtcNow() - started >= TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public async Task A_call_that_gives_up_waiting_hands_its_permit_back()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var budgets = new[] { new RateLimitRequest(RateLimitScope.PhoneNumberThroughput("111"), 1, 1) };
+
+        await limiter.WaitAsync(budgets, Forever, TestContext.Current.CancellationToken);
+
+        using var cancellation = new CancellationTokenSource();
+        var queued = limiter.WaitAsync(budgets, Forever, cancellation.Token).AsTask();
+        await Task.Yield();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+
+        // One second on, the bucket has earned one permit. The cancelled call sent nothing,
+        // so that permit belongs to whoever asks next — not to a call that never went.
+        time.Advance(TimeSpan.FromSeconds(1));
+        await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_cancelled_call_gives_back_every_budget_it_reserved()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var throughput = new RateLimitRequest(RateLimitScope.PhoneNumberThroughput("111"), 80, 80);
+        var pair = new RateLimitRequest(RateLimitScope.RecipientPair("111", "79000000001"), 1d / 6d, 1);
+
+        await limiter.WaitAsync([pair], Forever, TestContext.Current.CancellationToken);
+
+        // Throughput is granted at once; the pair allowance makes the call wait. Giving up
+        // has to return the throughput permit as well as the pair one.
+        using var cancellation = new CancellationTokenSource();
+        var queued = limiter.WaitAsync([throughput, pair], Forever, cancellation.Token).AsTask();
+        await Task.Yield();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+
+        for (var i = 0; i < 80; i++)
+        {
+            await limiter.WaitAsync([throughput], TimeSpan.Zero, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task An_idle_budget_is_not_forgotten_before_it_has_recovered()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemoryRateLimiter(time);
+        var budgets = new[]
+        {
+            new RateLimitRequest(RateLimitScope.BusinessAccountRequests("waba-1"), 200d / 3600, 200),
+        };
+
+        for (var i = 0; i < 200; i++)
+        {
+            await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+        }
+
+        // Eleven idle minutes is past the sweep, and earns back thirty-six of the two
+        // hundred. A limiter that dropped the bucket on age alone would hand out two
+        // hundred again, and Meta's own counter would reject a hundred and sixty of them.
+        time.Advance(TimeSpan.FromMinutes(11));
+
+        var granted = 0;
+        try
+        {
+            while (granted <= 200)
+            {
+                await limiter.WaitAsync(budgets, TimeSpan.Zero, TestContext.Current.CancellationToken);
+                granted++;
+            }
+        }
+        catch (WhatsAppRateLimitedException)
+        {
+            // The allowance ran out, which is the point.
+        }
+
+        Assert.InRange(granted, 30, 37);
     }
 
     private static RateLimitRequest[] Budgets(string phoneNumberId, string recipient) =>

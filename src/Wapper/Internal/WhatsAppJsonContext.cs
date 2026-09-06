@@ -17,7 +17,14 @@ namespace Wapper.Internal;
 // Bound one change at a time rather than reached through WebhookPayload, so a delivery on a
 // field this library has no event for is never walked at all.
 [JsonSerializable(typeof(WebhookValue))]
+// Bound one item at a time from the raw arrays on WebhookValue, so one item shaped in a way
+// this library cannot read costs that item alone.
+[JsonSerializable(typeof(WebhookMessage))]
+[JsonSerializable(typeof(WebhookStatus))]
 [JsonSerializable(typeof(TemplateDefinitionPayload))]
+// Written back out on its own when a template carries a component this library does not
+// know, so the component's body survives the read.
+[JsonSerializable(typeof(TemplateComponentDefinitionPayload))]
 [JsonSerializable(typeof(TemplateListResponse))]
 [JsonSerializable(typeof(TemplateCreatedResponse))]
 [JsonSerializable(typeof(PhoneNumberPayload))]

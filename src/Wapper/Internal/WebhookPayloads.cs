@@ -59,11 +59,20 @@ internal sealed class WebhookValue
     [JsonPropertyName("contacts")]
     public List<WebhookContact>? Contacts { get; set; }
 
+    /// <summary>
+    /// Left as raw JSON and bound one item at a time.
+    /// </summary>
+    /// <remarks>
+    /// Each item is an event of its own. Binding the array as a whole would let one item
+    /// Meta has reshaped fail every message beside it, and the failing item would have no
+    /// raw form of its own to report.
+    /// </remarks>
     [JsonPropertyName("messages")]
-    public List<WebhookMessage>? Messages { get; set; }
+    public List<JsonElement>? Messages { get; set; }
 
+    /// <inheritdoc cref="Messages" />
     [JsonPropertyName("statuses")]
-    public List<WebhookStatus>? Statuses { get; set; }
+    public List<JsonElement>? Statuses { get; set; }
 
     [JsonPropertyName("errors")]
     public List<GraphError>? Errors { get; set; }
@@ -119,8 +128,85 @@ internal sealed class WebhookValue
     [JsonPropertyName("old_limit")]
     public string? OldLimit { get; set; }
 
+    /// <summary>
+    /// A tier name on the phone number quality webhook, and on the capability webhook a
+    /// tier name or — before v24.0 — a number, so it stays raw until it is read.
+    /// </summary>
     [JsonPropertyName("max_daily_conversations_per_business")]
-    public string? MaxDailyConversationsPerBusiness { get; set; }
+    public JsonElement MaxDailyConversationsPerBusiness { get; set; }
+
+    // Business capability changes. Account-level; the limits arrive as bare numbers.
+
+    /// <summary>Retired in February 2026 in favour of the tier above; read while it lasts.</summary>
+    [JsonPropertyName("max_daily_conversation_per_phone")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? MaxDailyConversationPerPhone { get; set; }
+
+    [JsonPropertyName("max_phone_numbers_per_business")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? MaxPhoneNumbersPerBusiness { get; set; }
+
+    [JsonPropertyName("max_phone_numbers_per_waba")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? MaxPhoneNumbersPerWaba { get; set; }
+
+    // Account alerts. Meta's reference nests the alert under `alert_info`; its earlier
+    // examples laid the same fields flat on the value. Both are read.
+
+    [JsonPropertyName("entity_type")]
+    public string? EntityType { get; set; }
+
+    [JsonPropertyName("entity_id")]
+    public string? EntityId { get; set; }
+
+    [JsonPropertyName("alert_info")]
+    public WebhookAlertInfo? AlertInfo { get; set; }
+
+    [JsonPropertyName("alert_severity")]
+    public string? AlertSeverity { get; set; }
+
+    [JsonPropertyName("alert_status")]
+    public string? AlertStatus { get; set; }
+
+    [JsonPropertyName("alert_type")]
+    public string? AlertType { get; set; }
+
+    [JsonPropertyName("alert_description")]
+    public string? AlertDescription { get; set; }
+
+    // Security. Shares `event` and `display_phone_number` with the fields above.
+
+    [JsonPropertyName("requester")]
+    public string? Requester { get; set; }
+
+    // Template category changes. Share the template identifiers above.
+
+    [JsonPropertyName("previous_category")]
+    public string? PreviousCategory { get; set; }
+
+    [JsonPropertyName("new_category")]
+    public string? NewCategory { get; set; }
+
+    [JsonPropertyName("correct_category")]
+    public string? CorrectCategory { get; set; }
+
+    [JsonPropertyName("category_update_timestamp")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long? CategoryUpdateTimestamp { get; set; }
+
+    // Template component changes: the template's text as it now reads.
+
+    [JsonPropertyName("message_template_element")]
+    public string? MessageTemplateElement { get; set; }
+
+    [JsonPropertyName("message_template_title")]
+    public string? MessageTemplateTitle { get; set; }
+
+    [JsonPropertyName("message_template_footer")]
+    public string? MessageTemplateFooter { get; set; }
+
+    [JsonPropertyName("message_template_buttons")]
+    public List<WebhookTemplateButton>? MessageTemplateButtons { get; set; }
 
     [JsonPropertyName("decision")]
     public string? Decision { get; set; }
@@ -209,6 +295,36 @@ internal sealed class WebhookValue
 
     [JsonPropertyName("restriction_info")]
     public List<WebhookRestriction>? RestrictionInfo { get; set; }
+}
+
+internal sealed class WebhookAlertInfo
+{
+    [JsonPropertyName("alert_severity")]
+    public string? AlertSeverity { get; set; }
+
+    [JsonPropertyName("alert_status")]
+    public string? AlertStatus { get; set; }
+
+    [JsonPropertyName("alert_type")]
+    public string? AlertType { get; set; }
+
+    [JsonPropertyName("alert_description")]
+    public string? AlertDescription { get; set; }
+}
+
+internal sealed class WebhookTemplateButton
+{
+    [JsonPropertyName("message_template_button_type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("message_template_button_text")]
+    public string? Text { get; set; }
+
+    [JsonPropertyName("message_template_button_url")]
+    public string? Url { get; set; }
+
+    [JsonPropertyName("message_template_button_phone_number")]
+    public string? PhoneNumber { get; set; }
 }
 
 internal sealed class WebhookBanInfo

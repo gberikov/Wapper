@@ -50,8 +50,14 @@ public sealed record FlowStatusChanged : WhatsAppEvent
     /// <summary>What it was. <see cref="FlowStatus.Unknown"/> when the Flow was just created.</summary>
     public FlowStatus PreviousStatus { get; init; }
 
+    /// <summary>The raw previous status, in case Meta sent one this library does not know.</summary>
+    public string? RawPreviousStatus { get; init; }
+
     /// <summary>What it is now.</summary>
     public FlowStatus Status { get; init; }
+
+    /// <summary>The raw status, in case Meta sent one this library does not know.</summary>
+    public string? RawStatus { get; init; }
 
     /// <summary>Meta's own sentence about it, useful in a log line.</summary>
     public string? Message { get; init; }
